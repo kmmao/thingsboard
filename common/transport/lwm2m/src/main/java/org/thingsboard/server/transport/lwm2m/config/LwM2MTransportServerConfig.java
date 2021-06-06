@@ -27,14 +27,9 @@ import org.springframework.stereotype.Component;
 import javax.annotation.PostConstruct;
 import java.io.File;
 import java.io.FileInputStream;
-import java.io.IOException;
 import java.io.InputStream;
-import java.nio.file.Path;
-import java.nio.file.Paths;
+import java.net.URI;
 import java.security.KeyStore;
-import java.security.KeyStoreException;
-import java.security.NoSuchAlgorithmException;
-import java.security.cert.CertificateException;
 
 @Slf4j
 @Component
@@ -68,6 +63,14 @@ public class LwM2MTransportServerConfig implements LwM2MSecureServerConfig {
     @Getter
     @Value("${transport.lwm2m.registered_pool_size:}")
     private int registeredPoolSize;
+
+    @Getter
+    @Value("${transport.lwm2m.registration_store_pool_size:}")
+    private int registrationStorePoolSize;
+
+    @Getter
+    @Value("${transport.lwm2m.clean_period_in_sec:}")
+    private int cleanPeriodInSec;
 
     @Getter
     @Value("${transport.lwm2m.update_registered_pool_size:}")
@@ -136,18 +139,24 @@ public class LwM2MTransportServerConfig implements LwM2MSecureServerConfig {
     @Getter
     @Value("${transport.lwm2m.server.security.alias:}")
     private String certificateAlias;
-    
-    
+
+    @Getter
+    @Value("${transport.lwm2m.log_max_length:}")
+    private int logMaxLength;
+
+
     @PostConstruct
     public void init() {
+        URI uri = null;
         try {
-            File keyStoreFile = new File(Resources.getResource(keyStorePathFile).toURI());
+            uri = Resources.getResource(keyStorePathFile).toURI();
+            log.error("URI: {}", uri);
+            File keyStoreFile = new File(uri);
             InputStream inKeyStore = new FileInputStream(keyStoreFile);
             keyStoreValue = KeyStore.getInstance(keyStoreType);
             keyStoreValue.load(inKeyStore, keyStorePassword == null ? null : keyStorePassword.toCharArray());
         } catch (Exception e) {
-            log.error("Unable to lookup LwM2M keystore. Reason: " + e.getMessage(), e);
-            throw new RuntimeException("Failed to lookup LwM2M keystore", e);
+            log.info("Unable to lookup LwM2M keystore. Reason: {}, {}" , uri, e.getMessage());
         }
     }
 }
