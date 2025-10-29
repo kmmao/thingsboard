@@ -1,5 +1,5 @@
 /**
- * Copyright © 2016-2021 The Thingsboard Authors
+ * Copyright © 2016-2025 The Thingsboard Authors
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -15,350 +15,121 @@
  */
 package org.thingsboard.server.service.install.update;
 
-import com.fasterxml.jackson.databind.node.ObjectNode;
+import com.google.common.collect.Lists;
 import com.google.common.util.concurrent.Futures;
 import com.google.common.util.concurrent.ListenableFuture;
-import com.google.common.util.concurrent.MoreExecutors;
+import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
-import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.context.annotation.Profile;
 import org.springframework.stereotype.Service;
-import org.thingsboard.rule.engine.profile.TbDeviceProfileNode;
-import org.thingsboard.rule.engine.profile.TbDeviceProfileNodeConfiguration;
-import org.thingsboard.server.common.data.EntityView;
-import org.thingsboard.server.common.data.Tenant;
-import org.thingsboard.server.common.data.alarm.Alarm;
-import org.thingsboard.server.common.data.alarm.AlarmInfo;
-import org.thingsboard.server.common.data.alarm.AlarmQuery;
-import org.thingsboard.server.common.data.id.EntityViewId;
+import org.thingsboard.server.common.data.id.RuleNodeId;
 import org.thingsboard.server.common.data.id.TenantId;
-import org.thingsboard.server.common.data.kv.BaseReadTsKvQuery;
-import org.thingsboard.server.common.data.kv.ReadTsKvQuery;
-import org.thingsboard.server.common.data.kv.TsKvEntry;
-import org.thingsboard.server.common.data.page.PageData;
-import org.thingsboard.server.common.data.page.PageLink;
-import org.thingsboard.server.common.data.page.TimePageLink;
-import org.thingsboard.server.common.data.rule.RuleChain;
-import org.thingsboard.server.common.data.rule.RuleChainMetaData;
-import org.thingsboard.server.common.data.rule.RuleNode;
-import org.thingsboard.server.dao.alarm.AlarmDao;
-import org.thingsboard.server.dao.alarm.AlarmService;
-import org.thingsboard.server.dao.entity.EntityService;
-import org.thingsboard.server.dao.entityview.EntityViewService;
+import org.thingsboard.server.common.data.page.PageDataIterable;
 import org.thingsboard.server.dao.rule.RuleChainService;
-import org.thingsboard.server.dao.tenant.TenantService;
-import org.thingsboard.server.dao.timeseries.TimeseriesService;
-import org.thingsboard.common.util.JacksonUtil;
-import org.thingsboard.server.service.install.InstallScripts;
+import org.thingsboard.server.service.component.ComponentDiscoveryService;
+import org.thingsboard.server.service.component.RuleNodeClassInfo;
+import org.thingsboard.server.service.install.DbUpgradeExecutorService;
+import org.thingsboard.server.utils.TbNodeUpgradeUtils;
 
 import java.util.ArrayList;
-import java.util.Collections;
 import java.util.List;
 import java.util.concurrent.ExecutionException;
-import java.util.stream.Collectors;
-
-import static org.apache.commons.lang3.StringUtils.isBlank;
 
 @Service
 @Profile("install")
 @Slf4j
+@RequiredArgsConstructor
 public class DefaultDataUpdateService implements DataUpdateService {
 
-    @Autowired
-    private TenantService tenantService;
+    private static final int MAX_PENDING_SAVE_RULE_NODE_FUTURES = 256;
+    private static final int DEFAULT_PAGE_SIZE = 1024;
 
-    @Autowired
-    private RuleChainService ruleChainService;
-
-    @Autowired
-    private InstallScripts installScripts;
-
-    @Autowired
-    private EntityViewService entityViewService;
-
-    @Autowired
-    private TimeseriesService tsService;
-
-    @Autowired
-    private AlarmService alarmService;
-
-    @Autowired
-    private EntityService entityService;
-
-    @Autowired
-    private AlarmDao alarmDao;
+    private final RuleChainService ruleChainService;
+    private final ComponentDiscoveryService componentDiscoveryService;
+    private final DbUpgradeExecutorService executorService;
 
     @Override
-    public void updateData(String fromVersion) throws Exception {
-        switch (fromVersion) {
-            case "1.4.0":
-                log.info("Updating data from version 1.4.0 to 2.0.0 ...");
-                tenantsDefaultRuleChainUpdater.updateEntities(null);
-                break;
-            case "3.0.1":
-                log.info("Updating data from version 3.0.1 to 3.1.0 ...");
-                tenantsEntityViewsUpdater.updateEntities(null);
-                break;
-            case "3.1.1":
-                log.info("Updating data from version 3.1.1 to 3.2.0 ...");
-                tenantsRootRuleChainUpdater.updateEntities(null);
-                break;
-            case "3.2.2":
-                log.info("Updating data from version 3.2.2 to 3.3.0 ...");
-                tenantsDefaultEdgeRuleChainUpdater.updateEntities(null);
-                tenantsAlarmsCustomerUpdater.updateEntities(null);
-                break;
-            default:
-                throw new RuntimeException("Unable to update data, unsupported fromVersion: " + fromVersion);
-        }
+    public void updateData() throws Exception {
+        log.info("Updating data ...");
+        //TODO: should be cleaned after each release
+
+        log.info("Data updated.");
     }
 
-    private final PaginatedUpdater<String, Tenant> tenantsDefaultRuleChainUpdater =
-            new PaginatedUpdater<>() {
-
-                @Override
-                protected String getName() {
-                    return "Tenants default rule chain updater";
-                }
-
-                @Override
-                protected boolean forceReportTotal() {
-                    return true;
-                }
-
-                @Override
-                protected PageData<Tenant> findEntities(String region, PageLink pageLink) {
-                    return tenantService.findTenants(pageLink);
-                }
-
-                @Override
-                protected void updateEntity(Tenant tenant) {
-                    try {
-                        RuleChain ruleChain = ruleChainService.getRootTenantRuleChain(tenant.getId());
-                        if (ruleChain == null) {
-                            installScripts.createDefaultRuleChains(tenant.getId());
-                        }
-                    } catch (Exception e) {
-                        log.error("Unable to update Tenant", e);
-                    }
-                }
-            };
-
-    private final PaginatedUpdater<String, Tenant> tenantsDefaultEdgeRuleChainUpdater =
-            new PaginatedUpdater<>() {
-
-                @Override
-                protected String getName() {
-                    return "Tenants default edge rule chain updater";
-                }
-
-                @Override
-                protected boolean forceReportTotal() {
-                    return true;
-                }
-
-                @Override
-                protected PageData<Tenant> findEntities(String region, PageLink pageLink) {
-                    return tenantService.findTenants(pageLink);
-                }
-
-                @Override
-                protected void updateEntity(Tenant tenant) {
-                    try {
-                        RuleChain defaultEdgeRuleChain = ruleChainService.getEdgeTemplateRootRuleChain(tenant.getId());
-                        if (defaultEdgeRuleChain == null) {
-                            installScripts.createDefaultEdgeRuleChains(tenant.getId());
-                        }
-                    } catch (Exception e) {
-                        log.error("Unable to update Tenant", e);
-                    }
-                }
-            };
-
-    private final PaginatedUpdater<String, Tenant> tenantsRootRuleChainUpdater =
-            new PaginatedUpdater<>() {
-
-                @Override
-                protected String getName() {
-                    return "Tenants root rule chain updater";
-                }
-
-                @Override
-                protected boolean forceReportTotal() {
-                    return true;
-                }
-
-                @Override
-                protected PageData<Tenant> findEntities(String region, PageLink pageLink) {
-                    return tenantService.findTenants(pageLink);
-                }
-
-                @Override
-                protected void updateEntity(Tenant tenant) {
-                    try {
-                        RuleChain ruleChain = ruleChainService.getRootTenantRuleChain(tenant.getId());
-                        if (ruleChain == null) {
-                            installScripts.createDefaultRuleChains(tenant.getId());
-                        } else {
-                            RuleChainMetaData md = ruleChainService.loadRuleChainMetaData(tenant.getId(), ruleChain.getId());
-                            int oldIdx = md.getFirstNodeIndex();
-                            int newIdx = md.getNodes().size();
-
-                            if (md.getNodes().size() < oldIdx) {
-                                // Skip invalid rule chains
-                                return;
-                            }
-
-                            RuleNode oldFirstNode = md.getNodes().get(oldIdx);
-                            if (oldFirstNode.getType().equals(TbDeviceProfileNode.class.getName())) {
-                                // No need to update the rule node twice.
-                                return;
-                            }
-
-                            RuleNode ruleNode = new RuleNode();
-                            ruleNode.setRuleChainId(ruleChain.getId());
-                            ruleNode.setName("Device Profile Node");
-                            ruleNode.setType(TbDeviceProfileNode.class.getName());
-                            ruleNode.setDebugMode(false);
-                            TbDeviceProfileNodeConfiguration ruleNodeConfiguration = new TbDeviceProfileNodeConfiguration().defaultConfiguration();
-                            ruleNode.setConfiguration(JacksonUtil.valueToTree(ruleNodeConfiguration));
-                            ObjectNode additionalInfo = JacksonUtil.newObjectNode();
-                            additionalInfo.put("description", "Process incoming messages from devices with the alarm rules defined in the device profile. Dispatch all incoming messages with \"Success\" relation type.");
-                            additionalInfo.put("layoutX", 204);
-                            additionalInfo.put("layoutY", 240);
-                            ruleNode.setAdditionalInfo(additionalInfo);
-
-                            md.getNodes().add(ruleNode);
-                            md.setFirstNodeIndex(newIdx);
-                            md.addConnectionInfo(newIdx, oldIdx, "Success");
-                            ruleChainService.saveRuleChainMetaData(tenant.getId(), md);
-                        }
-                    } catch (Exception e) {
-                        log.error("[{}] Unable to update Tenant: {}", tenant.getId(), tenant.getName(), e);
-                    }
-                }
-            };
-
-    private final PaginatedUpdater<String, Tenant> tenantsEntityViewsUpdater =
-            new PaginatedUpdater<>() {
-
-                @Override
-                protected String getName() {
-                    return "Tenants entity views updater";
-                }
-
-                @Override
-                protected boolean forceReportTotal() {
-                    return true;
-                }
-
-                @Override
-                protected PageData<Tenant> findEntities(String region, PageLink pageLink) {
-                    return tenantService.findTenants(pageLink);
-                }
-
-                @Override
-                protected void updateEntity(Tenant tenant) {
-                    updateTenantEntityViews(tenant.getId());
-                }
-            };
-
-    private void updateTenantEntityViews(TenantId tenantId) {
-        PageLink pageLink = new PageLink(100);
-        PageData<EntityView> pageData = entityViewService.findEntityViewByTenantId(tenantId, pageLink);
-        boolean hasNext = true;
-        while (hasNext) {
-            List<ListenableFuture<List<Void>>> updateFutures = new ArrayList<>();
-            for (EntityView entityView : pageData.getData()) {
-                updateFutures.add(updateEntityViewLatestTelemetry(entityView));
-            }
-
+    @Override
+    public void upgradeRuleNodes() {
+        int totalRuleNodesUpgraded = 0;
+        log.info("Starting rule nodes upgrade ...");
+        var nodeClassToVersionMap = componentDiscoveryService.getVersionedNodes();
+        log.debug("Found {} versioned nodes to check for upgrade!", nodeClassToVersionMap.size());
+        for (var ruleNodeClassInfo : nodeClassToVersionMap) {
+            var ruleNodeTypeForLogs = ruleNodeClassInfo.getSimpleName();
+            var toVersion = ruleNodeClassInfo.getCurrentVersion();
             try {
-                Futures.allAsList(updateFutures).get();
-            } catch (InterruptedException | ExecutionException e) {
-                log.error("Failed to copy latest telemetry to entity view", e);
+                log.debug("Going to check for nodes with type: {} to upgrade to version: {}.", ruleNodeTypeForLogs, toVersion);
+                var ruleNodesIdsToUpgrade = getRuleNodesIdsWithTypeAndVersionLessThan(ruleNodeClassInfo.getClassName(), toVersion);
+                if (ruleNodesIdsToUpgrade.isEmpty()) {
+                    log.debug("There are no active nodes with type {}, or all nodes with this type already set to latest version!", ruleNodeTypeForLogs);
+                    continue;
+                }
+                var ruleNodeIdsPartitions = Lists.partition(ruleNodesIdsToUpgrade, MAX_PENDING_SAVE_RULE_NODE_FUTURES);
+                for (var ruleNodePack : ruleNodeIdsPartitions) {
+                    totalRuleNodesUpgraded += processRuleNodePack(ruleNodePack, ruleNodeClassInfo);
+                    log.info("{} upgraded rule nodes so far ...", totalRuleNodesUpgraded);
+                }
+            } catch (Exception e) {
+                log.error("Unexpected error during {} rule nodes upgrade: ", ruleNodeTypeForLogs, e);
             }
+        }
+        log.info("Finished rule nodes upgrade. Upgraded rule nodes count: {}", totalRuleNodesUpgraded);
+    }
 
-            if (pageData.hasNext()) {
-                pageLink = pageLink.nextPageLink();
-                pageData = entityViewService.findEntityViewByTenantId(tenantId, pageLink);
-            } else {
-                hasNext = false;
+    private int processRuleNodePack(List<RuleNodeId> ruleNodeIdsBatch, RuleNodeClassInfo ruleNodeClassInfo) {
+        var saveFutures = new ArrayList<ListenableFuture<?>>(MAX_PENDING_SAVE_RULE_NODE_FUTURES);
+        String ruleNodeType = ruleNodeClassInfo.getSimpleName();
+        int toVersion = ruleNodeClassInfo.getCurrentVersion();
+        var ruleNodesPack = ruleChainService.findAllRuleNodesByIds(ruleNodeIdsBatch);
+        for (var ruleNode : ruleNodesPack) {
+            if (ruleNode == null) {
+                continue;
             }
+            var ruleNodeId = ruleNode.getId();
+            int fromVersion = ruleNode.getConfigurationVersion();
+            log.debug("Going to upgrade rule node with id: {} type: {} fromVersion: {} toVersion: {}",
+                    ruleNodeId, ruleNodeType, fromVersion, toVersion);
+            try {
+                TbNodeUpgradeUtils.upgradeConfigurationAndVersion(ruleNode, ruleNodeClassInfo);
+                saveFutures.add(executorService.submit(() -> {
+                    ruleChainService.saveRuleNode(TenantId.SYS_TENANT_ID, ruleNode);
+                    log.debug("Successfully upgrade rule node with id: {} type: {} fromVersion: {} toVersion: {}",
+                            ruleNodeId, ruleNodeType, fromVersion, toVersion);
+                }));
+            } catch (Exception e) {
+                log.warn("Failed to upgrade rule node with id: {} type: {} fromVersion: {} toVersion: {} due to: ",
+                        ruleNodeId, ruleNodeType, fromVersion, toVersion, e);
+            }
+        }
+        try {
+            return Futures.allAsList(saveFutures).get().size();
+        } catch (ExecutionException | InterruptedException e) {
+            throw new RuntimeException("Failed to process save rule nodes requests due to: ", e);
         }
     }
 
-    private ListenableFuture<List<Void>> updateEntityViewLatestTelemetry(EntityView entityView) {
-        EntityViewId entityId = entityView.getId();
-        List<String> keys = entityView.getKeys() != null && entityView.getKeys().getTimeseries() != null ?
-                entityView.getKeys().getTimeseries() : Collections.emptyList();
-        long startTs = entityView.getStartTimeMs();
-        long endTs = entityView.getEndTimeMs() == 0 ? Long.MAX_VALUE : entityView.getEndTimeMs();
-        ListenableFuture<List<String>> keysFuture;
-        if (keys.isEmpty()) {
-            keysFuture = Futures.transform(tsService.findAllLatest(TenantId.SYS_TENANT_ID,
-                    entityView.getEntityId()), latest -> latest.stream().map(TsKvEntry::getKey).collect(Collectors.toList()), MoreExecutors.directExecutor());
+    private List<RuleNodeId> getRuleNodesIdsWithTypeAndVersionLessThan(String type, int toVersion) {
+        var ruleNodeIds = new ArrayList<RuleNodeId>();
+        new PageDataIterable<>(pageLink ->
+                ruleChainService.findAllRuleNodeIdsByTypeAndVersionLessThan(type, toVersion, pageLink), DEFAULT_PAGE_SIZE
+        ).forEach(ruleNodeIds::add);
+        return ruleNodeIds;
+    }
+
+    public static boolean getEnv(String name, boolean defaultValue) {
+        String env = System.getenv(name);
+        if (env == null) {
+            return defaultValue;
         } else {
-            keysFuture = Futures.immediateFuture(keys);
-        }
-        ListenableFuture<List<TsKvEntry>> latestFuture = Futures.transformAsync(keysFuture, fetchKeys -> {
-            List<ReadTsKvQuery> queries = fetchKeys.stream().filter(key -> !isBlank(key)).map(key -> new BaseReadTsKvQuery(key, startTs, endTs, 1, "DESC")).collect(Collectors.toList());
-            if (!queries.isEmpty()) {
-                return tsService.findAll(TenantId.SYS_TENANT_ID, entityView.getEntityId(), queries);
-            } else {
-                return Futures.immediateFuture(null);
-            }
-        }, MoreExecutors.directExecutor());
-        return Futures.transformAsync(latestFuture, latestValues -> {
-            if (latestValues != null && !latestValues.isEmpty()) {
-                ListenableFuture<List<Void>> saveFuture = tsService.saveLatest(TenantId.SYS_TENANT_ID, entityId, latestValues);
-                return saveFuture;
-            }
-            return Futures.immediateFuture(null);
-        }, MoreExecutors.directExecutor());
-    }
-
-    private final PaginatedUpdater<String, Tenant> tenantsAlarmsCustomerUpdater =
-            new PaginatedUpdater<>() {
-
-                @Override
-                protected String getName() {
-                    return "Tenants alarms customer updater";
-                }
-
-                @Override
-                protected boolean forceReportTotal() {
-                    return true;
-                }
-
-                @Override
-                protected PageData<Tenant> findEntities(String region, PageLink pageLink) {
-                    return tenantService.findTenants(pageLink);
-                }
-
-                @Override
-                protected void updateEntity(Tenant tenant) {
-                    updateTenantAlarmsCustomer(tenant.getId());
-                }
-            };
-
-    private void updateTenantAlarmsCustomer(TenantId tenantId) {
-        AlarmQuery alarmQuery = new AlarmQuery(null, new TimePageLink(100), null, null, false);
-        PageData<AlarmInfo> alarms = alarmDao.findAlarms(tenantId, alarmQuery);
-        boolean hasNext = true;
-        while (hasNext) {
-            for (Alarm alarm : alarms.getData()) {
-                if (alarm.getCustomerId() == null && alarm.getOriginator() != null) {
-                    alarm.setCustomerId(entityService.fetchEntityCustomerId(tenantId, alarm.getOriginator()));
-                    alarmDao.save(tenantId, alarm);
-                }
-            }
-            if (alarms.hasNext()) {
-                alarmQuery.setPageLink(alarmQuery.getPageLink().nextPageLink());
-                alarms = alarmDao.findAlarms(tenantId, alarmQuery);
-            } else {
-                hasNext = false;
-            }
+            return Boolean.parseBoolean(env);
         }
     }
 

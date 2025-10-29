@@ -1,5 +1,5 @@
 ///
-/// Copyright © 2016-2021 The Thingsboard Authors
+/// Copyright © 2016-2025 The Thingsboard Authors
 ///
 /// Licensed under the Apache License, Version 2.0 (the "License");
 /// you may not use this file except in compliance with the License.
@@ -14,37 +14,62 @@
 /// limitations under the License.
 ///
 
-import { Dashboard, DashboardLayoutId, GridSettings, WidgetLayouts } from '@app/shared/models/dashboard.models';
+import {
+  BreakpointId,
+  Dashboard,
+  DashboardLayoutId,
+  DashboardLayoutInfo,
+  GridSettings,
+  WidgetLayouts
+} from '@app/shared/models/dashboard.models';
 import { Widget, WidgetPosition } from '@app/shared/models/widget.models';
 import { Timewindow } from '@shared/models/time/time.models';
 import { IAliasController, IStateController } from '@core/api/widget-api.models';
 import { ILayoutController } from './layout/layout.models';
 import { DashboardContextMenuItem, WidgetContextMenuItem } from '@home/models/dashboard-component.models';
+import { BehaviorSubject, Observable } from 'rxjs';
+import { displayGrids } from 'angular-gridster2/lib/gridsterConfig.interface';
+import { ElementRef } from '@angular/core';
 
 export declare type DashboardPageScope = 'tenant' | 'customer';
+
+export interface DashboardPageInitData {
+  dashboard: Dashboard;
+  currentDashboardId?: string;
+  widgetEditMode?: boolean;
+  singlePageMode?: boolean;
+}
 
 export interface DashboardContext {
   instanceId: string;
   state: string;
+  breakpoint: BreakpointId;
   getDashboard: () => Dashboard;
   dashboardTimewindow: Timewindow;
   aliasController: IAliasController;
   stateController: IStateController;
+  stateChanged: Observable<string>;
+  stateId: Observable<string>;
   runChangeDetection: () => void;
 }
 
 export interface IDashboardController {
   dashboardCtx: DashboardContext;
+  dashboardContainer: ElementRef;
+  dashboardContent: ElementRef;
+  elRef: ElementRef;
   openRightLayout();
   openDashboardState(stateId: string, openRightLayout: boolean);
   addWidget($event: Event, layoutCtx: DashboardPageLayoutContext);
   editWidget($event: Event, layoutCtx: DashboardPageLayoutContext, widget: Widget);
-  exportWidget($event: Event, layoutCtx: DashboardPageLayoutContext, widget: Widget);
+  replaceReferenceWithWidgetCopy($event: Event, layoutCtx: DashboardPageLayoutContext, widget: Widget);
+  exportWidget($event: Event, layoutCtx: DashboardPageLayoutContext, widget: Widget, widgetTitle: string);
   removeWidget($event: Event, layoutCtx: DashboardPageLayoutContext, widget: Widget);
   widgetMouseDown($event: Event, layoutCtx: DashboardPageLayoutContext, widget: Widget);
+  dashboardMouseDown($event: Event, layoutCtx: DashboardPageLayoutContext);
   widgetClicked($event: Event, layoutCtx: DashboardPageLayoutContext, widget: Widget);
   prepareDashboardContextMenu(layoutCtx: DashboardPageLayoutContext): Array<DashboardContextMenuItem>;
-  prepareWidgetContextMenu(layoutCtx: DashboardPageLayoutContext, widget: Widget): Array<WidgetContextMenuItem>;
+  prepareWidgetContextMenu(layoutCtx: DashboardPageLayoutContext, widget: Widget, isReference: boolean): Array<WidgetContextMenuItem>;
   copyWidget($event: Event, layoutCtx: DashboardPageLayoutContext, widget: Widget);
   copyWidgetReference($event: Event, layoutCtx: DashboardPageLayoutContext, widget: Widget);
   pasteWidget($event: Event, layoutCtx: DashboardPageLayoutContext, pos: WidgetPosition);
@@ -53,12 +78,16 @@ export interface IDashboardController {
 
 export interface DashboardPageLayoutContext {
   id: DashboardLayoutId;
+  layoutData: DashboardLayoutInfo;
+  layoutDataChanged: BehaviorSubject<void>;
+  breakpoint: BreakpointId;
   widgets: LayoutWidgetsArray;
   widgetLayouts: WidgetLayouts;
   gridSettings: GridSettings;
   ctrl: ILayoutController;
   dashboardCtrl: IDashboardController;
   ignoreLoading: boolean;
+  displayGrid: displayGrids;
 }
 
 export interface DashboardPageLayout {

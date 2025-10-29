@@ -1,5 +1,5 @@
 /**
- * Copyright © 2016-2021 The Thingsboard Authors
+ * Copyright © 2016-2025 The Thingsboard Authors
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -16,42 +16,36 @@
 package org.thingsboard.server.dao.model.sql;
 
 import com.fasterxml.jackson.databind.JsonNode;
+import jakarta.persistence.Column;
+import jakarta.persistence.Convert;
+import jakarta.persistence.Entity;
+import jakarta.persistence.Table;
 import lombok.Data;
 import lombok.EqualsAndHashCode;
-import org.hibernate.annotations.Type;
-import org.hibernate.annotations.TypeDef;
 import org.thingsboard.server.common.data.Customer;
 import org.thingsboard.server.common.data.id.CustomerId;
 import org.thingsboard.server.common.data.id.TenantId;
-import org.thingsboard.server.dao.model.BaseSqlEntity;
+import org.thingsboard.server.dao.model.BaseVersionedEntity;
 import org.thingsboard.server.dao.model.ModelConstants;
-import org.thingsboard.server.dao.model.SearchTextEntity;
-import org.thingsboard.server.dao.util.mapping.JsonStringType;
+import org.thingsboard.server.dao.util.mapping.JsonConverter;
 
-import javax.persistence.Column;
-import javax.persistence.Entity;
-import javax.persistence.Table;
 import java.util.UUID;
 
 @Data
 @EqualsAndHashCode(callSuper = true)
 @Entity
-@TypeDef(name = "json", typeClass = JsonStringType.class)
-@Table(name = ModelConstants.CUSTOMER_COLUMN_FAMILY_NAME)
-public final class CustomerEntity extends BaseSqlEntity<Customer> implements SearchTextEntity<Customer> {
+@Table(name = ModelConstants.CUSTOMER_TABLE_NAME)
+public final class CustomerEntity extends BaseVersionedEntity<Customer> {
 
     @Column(name = ModelConstants.CUSTOMER_TENANT_ID_PROPERTY)
     private UUID tenantId;
-    
+
     @Column(name = ModelConstants.CUSTOMER_TITLE_PROPERTY)
     private String title;
-    
-    @Column(name = ModelConstants.SEARCH_TEXT_PROPERTY)
-    private String searchText;
-    
+
     @Column(name = ModelConstants.COUNTRY_PROPERTY)
     private String country;
-    
+
     @Column(name = ModelConstants.STATE_PROPERTY)
     private String state;
 
@@ -73,19 +67,22 @@ public final class CustomerEntity extends BaseSqlEntity<Customer> implements Sea
     @Column(name = ModelConstants.EMAIL_PROPERTY)
     private String email;
 
-    @Type(type = "json")
+    @Column(name = ModelConstants.CUSTOMER_IS_PUBLIC_PROPERTY)
+    private boolean isPublic;
+
+    @Convert(converter = JsonConverter.class)
     @Column(name = ModelConstants.CUSTOMER_ADDITIONAL_INFO_PROPERTY)
     private JsonNode additionalInfo;
+
+    @Column(name = ModelConstants.EXTERNAL_ID_PROPERTY)
+    private UUID externalId;
 
     public CustomerEntity() {
         super();
     }
 
     public CustomerEntity(Customer customer) {
-        if (customer.getId() != null) {
-            this.setUuid(customer.getId().getId());
-        }
-        this.setCreatedTime(customer.getCreatedTime());
+        super(customer);
         this.tenantId = customer.getTenantId().getId();
         this.title = customer.getTitle();
         this.country = customer.getCountry();
@@ -97,23 +94,18 @@ public final class CustomerEntity extends BaseSqlEntity<Customer> implements Sea
         this.phone = customer.getPhone();
         this.email = customer.getEmail();
         this.additionalInfo = customer.getAdditionalInfo();
-    }
-
-    @Override
-    public String getSearchTextSource() {
-        return title;
-    }
-
-    @Override
-    public void setSearchText(String searchText) {
-        this.searchText = searchText;
+        this.isPublic = customer.isPublic();
+        if (customer.getExternalId() != null) {
+            this.externalId = customer.getExternalId().getId();
+        }
     }
 
     @Override
     public Customer toData() {
         Customer customer = new Customer(new CustomerId(this.getUuid()));
         customer.setCreatedTime(createdTime);
-        customer.setTenantId(new TenantId(tenantId));
+        customer.setVersion(version);
+        customer.setTenantId(TenantId.fromUUID(tenantId));
         customer.setTitle(title);
         customer.setCountry(country);
         customer.setState(state);
@@ -124,6 +116,9 @@ public final class CustomerEntity extends BaseSqlEntity<Customer> implements Sea
         customer.setPhone(phone);
         customer.setEmail(email);
         customer.setAdditionalInfo(additionalInfo);
+        if (externalId != null) {
+            customer.setExternalId(new CustomerId(externalId));
+        }
         return customer;
     }
 

@@ -1,5 +1,5 @@
 ///
-/// Copyright © 2016-2021 The Thingsboard Authors
+/// Copyright © 2016-2025 The Thingsboard Authors
 ///
 /// Licensed under the Apache License, Version 2.0 (the "License");
 /// you may not use this file except in compliance with the License.
@@ -16,15 +16,29 @@
 
 import { AliasInfo, IAliasController, StateControllerHolder, StateEntityInfo } from '@core/api/widget-api.models';
 import { forkJoin, Observable, of, ReplaySubject, Subject } from 'rxjs';
-import { Datasource, DatasourceType, datasourceTypeTranslationMap } from '@app/shared/models/widget.models';
-import { deepClone, isEqual } from '@core/utils';
+import {
+  Datasource,
+  DatasourceType,
+  datasourceTypeTranslationMap,
+  TargetDevice,
+  TargetDeviceType,
+  targetDeviceValid
+} from '@app/shared/models/widget.models';
+import { deepClone, isDefinedAndNotNull, isEqual } from '@core/utils';
 import { EntityService } from '@core/http/entity.service';
 import { UtilsService } from '@core/services/utils.service';
 import { AliasFilterType, EntityAliases, SingleEntityFilter } from '@shared/models/alias.models';
 import { EntityInfo } from '@shared/models/entity.models';
 import { map, mergeMap } from 'rxjs/operators';
 import {
-  defaultEntityDataPageLink, Filter, FilterInfo, filterInfoToKeyFilters, Filters, KeyFilter, singleEntityDataPageLink,
+  createDefaultEntityDataPageLink,
+  Filter,
+  FilterInfo,
+  filterInfoToKeyFilters,
+  Filters,
+  KeyFilter,
+  singleEntityDataPageLink,
+  singleEntityFilterFromDeviceId,
   updateDatasourceFromEntityInfo
 } from '@shared/models/query/query.models';
 import { TranslateService } from '@ngx-translate/core';
@@ -44,20 +58,24 @@ export class AliasController implements IAliasController {
   filters: Filters;
   userFilters: Filters;
 
-  resolvedAliases: {[aliasId: string]: AliasInfo} = {};
-  resolvedAliasesObservable: {[aliasId: string]: Observable<AliasInfo>} = {};
+  resolvedAliases: { [aliasId: string]: AliasInfo } = {};
+  resolvedAliasesObservable: { [aliasId: string]: Observable<AliasInfo> } = {};
 
-  resolvedAliasesToStateEntities: {[aliasId: string]: StateEntityInfo} = {};
+  resolvedDevices: { [deviceId: string]: EntityInfo } = {};
+  resolvedDevicesObservable: { [deviceId: string]: Observable<EntityInfo> } = {};
+
+  resolvedAliasesToStateEntities: { [aliasId: string]: StateEntityInfo } = {};
 
   constructor(private utils: UtilsService,
               private entityService: EntityService,
               private translate: TranslateService,
               private stateControllerHolder: StateControllerHolder,
               private origEntityAliases: EntityAliases,
-              private origFilters: Filters) {
+              private origFilters: Filters,
+              private origUserFilters?: Filters) {
     this.entityAliases = deepClone(this.origEntityAliases) || {};
     this.filters = deepClone(this.origFilters) || {};
-    this.userFilters = {};
+    this.userFilters = deepClone(this.origUserFilters) || {};
   }
 
   updateEntityAliases(newEntityAliases: EntityAliases) {
@@ -152,6 +170,10 @@ export class AliasController implements IAliasController {
     return this.filters;
   }
 
+  getUserFilters(): Filters {
+    return this.userFilters;
+  }
+
   getFilterInfo(filterId: string): FilterInfo {
     if (this.userFilters[filterId]) {
       return this.userFilters[filterId];
@@ -241,13 +263,79 @@ export class AliasController implements IAliasController {
     );
   }
 
+  resolveSingleEntityInfoForDeviceId(deviceId: string): Observable<EntityInfo> {
+    let entityInfo = this.resolvedDevices[deviceId];
+    if (entityInfo) {
+      return of(entityInfo);
+    } else if (this.resolvedDevicesObservable[deviceId]) {
+      return this.resolvedDevicesObservable[deviceId];
+    } else {
+      const resolvedDeviceSubject = new ReplaySubject<EntityInfo>();
+      this.resolvedDevicesObservable[deviceId] = resolvedDeviceSubject.asObservable();
+      const entityFilter = singleEntityFilterFromDeviceId(deviceId);
+      this.entityService.findSingleEntityInfoByEntityFilter(entityFilter,
+        {ignoreLoading: true, ignoreErrors: true}).subscribe(
+        (resolvedEntityInfo) => {
+          this.resolvedDevices[deviceId] = resolvedEntityInfo;
+          delete this.resolvedDevicesObservable[deviceId];
+          resolvedDeviceSubject.next(resolvedEntityInfo);
+          resolvedDeviceSubject.complete();
+        },
+        () => {
+          resolvedDeviceSubject.error(null);
+          delete this.resolvedDevicesObservable[deviceId];
+        }
+      );
+      entityInfo = this.resolvedDevices[deviceId];
+      if (entityInfo) {
+        return of(entityInfo);
+      } else {
+        return this.resolvedDevicesObservable[deviceId];
+      }
+    }
+  }
+
+  resolveSingleEntityInfoForTargetDevice(targetDevice: TargetDevice): Observable<EntityInfo> {
+    if (targetDeviceValid(targetDevice)) {
+      if (targetDevice.type === TargetDeviceType.entity) {
+        return this.resolveSingleEntityInfo(targetDevice.entityAliasId);
+      } else {
+        return this.resolveSingleEntityInfoForDeviceId(targetDevice.deviceId);
+      }
+    } else {
+      return of(null);
+    }
+  }
+
   private resolveDatasource(datasource: Datasource, forceFilter = false): Observable<Datasource> {
     const newDatasource = deepClone(datasource);
-    if (newDatasource.type === DatasourceType.entity || newDatasource.type === DatasourceType.entityCount) {
+    if (newDatasource.type === DatasourceType.entity
+      || newDatasource.type === DatasourceType.device
+      || newDatasource.type === DatasourceType.entityCount
+      || newDatasource.type === DatasourceType.alarmCount) {
       if (newDatasource.filterId) {
         newDatasource.keyFilters = this.getKeyFilters(newDatasource.filterId);
       }
-      if (newDatasource.entityAliasId) {
+      if (newDatasource.type === DatasourceType.alarmCount) {
+        newDatasource.alarmFilter = this.entityService.resolveAlarmFilter(newDatasource.alarmFilterConfig, false);
+      }
+      if (newDatasource.type === DatasourceType.device) {
+        newDatasource.type = DatasourceType.entity;
+        newDatasource.entityFilter = singleEntityFilterFromDeviceId(newDatasource.deviceId);
+        if (forceFilter) {
+          return this.entityService.findSingleEntityInfoByEntityFilter(newDatasource.entityFilter,
+            {ignoreLoading: true, ignoreErrors: true}).pipe(
+            map((entity) => {
+              if (entity) {
+                updateDatasourceFromEntityInfo(newDatasource, entity, true);
+              }
+              return newDatasource;
+            })
+          );
+        } else {
+          return of(newDatasource);
+        }
+      } else if (newDatasource.entityAliasId) {
         return this.getAliasInfo(newDatasource.entityAliasId).pipe(
           mergeMap((aliasInfo) => {
             newDatasource.aliasName = aliasInfo.alias;
@@ -322,7 +410,10 @@ export class AliasController implements IAliasController {
     );
   }
 
-  resolveDatasources(datasources: Array<Datasource>, singleEntity?: boolean): Observable<Array<Datasource>> {
+  resolveDatasources(datasources: Array<Datasource>, singleEntity?: boolean, pageSize = 1024): Observable<Array<Datasource>> {
+    if (!datasources || !datasources.length) {
+      return of([]);
+    }
     const toResolve = singleEntity ? [datasources[0]] : datasources;
     const observables = new Array<Observable<Datasource>>();
     toResolve.forEach((datasource) => {
@@ -332,22 +423,30 @@ export class AliasController implements IAliasController {
       map((result) => {
         let functionIndex = 0;
         let entityCountIndex = 0;
+        let alarmCountIndex = 0;
         result.forEach((datasource) => {
-          if (datasource.type === DatasourceType.function || datasource.type === DatasourceType.entityCount) {
+          if (datasource.type === DatasourceType.function || datasource.type === DatasourceType.entityCount ||
+            datasource.type === DatasourceType.alarmCount) {
             let name: string;
             if (datasource.name && datasource.name.length) {
               name = datasource.name;
             } else {
+              name = this.translate.instant(datasourceTypeTranslationMap.get(datasource.type));
               if (datasource.type === DatasourceType.function) {
                 functionIndex++;
-              } else {
+                if (functionIndex > 1) {
+                  name += ' ' + functionIndex;
+                }
+              } else if (datasource.type === DatasourceType.entityCount) {
                 entityCountIndex++;
-              }
-              name = this.translate.instant(datasourceTypeTranslationMap.get(datasource.type));
-              if (datasource.type === DatasourceType.function && functionIndex > 1) {
-                name += ' ' + functionIndex;
-              } else if (datasource.type === DatasourceType.entityCount && entityCountIndex > 1) {
-                name += ' ' + entityCountIndex;
+                if (entityCountIndex > 1) {
+                  name += ' ' + entityCountIndex;
+                }
+              } else {
+                alarmCountIndex++;
+                if (alarmCountIndex > 1) {
+                  name += ' ' + alarmCountIndex;
+                }
               }
             }
             datasource.name = name;
@@ -357,7 +456,8 @@ export class AliasController implements IAliasController {
             if (singleEntity) {
               datasource.pageLink = deepClone(singleEntityDataPageLink);
             } else if (!datasource.pageLink) {
-              datasource.pageLink = deepClone(defaultEntityDataPageLink);
+              pageSize = isDefinedAndNotNull(pageSize) && pageSize > 0 ? pageSize : 1024;
+              datasource.pageLink = createDefaultEntityDataPageLink(pageSize);
             }
           }
         });

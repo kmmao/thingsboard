@@ -1,5 +1,5 @@
 /**
- * Copyright © 2016-2021 The Thingsboard Authors
+ * Copyright © 2016-2025 The Thingsboard Authors
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -16,16 +16,14 @@
 package org.thingsboard.server.dao.component;
 
 import com.fasterxml.jackson.databind.JsonNode;
-import com.github.fge.jsonschema.core.exceptions.ProcessingException;
-import com.github.fge.jsonschema.core.report.ProcessingReport;
-import com.github.fge.jsonschema.main.JsonSchemaFactory;
-import com.github.fge.jsonschema.main.JsonValidator;
+import com.networknt.schema.JsonSchema;
+import com.networknt.schema.JsonSchemaFactory;
+import com.networknt.schema.SpecVersion;
+import com.networknt.schema.ValidationMessage;
 import lombok.extern.slf4j.Slf4j;
-import org.apache.commons.lang3.StringUtils;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.stereotype.Service;
 import org.thingsboard.server.common.data.id.ComponentDescriptorId;
-import org.thingsboard.server.common.data.id.EntityId;
 import org.thingsboard.server.common.data.id.TenantId;
 import org.thingsboard.server.common.data.page.PageData;
 import org.thingsboard.server.common.data.page.PageLink;
@@ -38,6 +36,7 @@ import org.thingsboard.server.dao.service.DataValidator;
 import org.thingsboard.server.dao.service.Validator;
 
 import java.util.Optional;
+import java.util.Set;
 
 /**
  * @author Andrew Shvayka
@@ -49,9 +48,12 @@ public class BaseComponentDescriptorService implements ComponentDescriptorServic
     @Autowired
     private ComponentDescriptorDao componentDescriptorDao;
 
+    @Autowired
+    private DataValidator<ComponentDescriptor> componentValidator;
+
     @Override
     public ComponentDescriptor saveComponent(TenantId tenantId, ComponentDescriptor component) {
-        componentValidator.validate(component, data -> new TenantId(EntityId.NULL_UUID));
+        componentValidator.validate(component, data -> TenantId.SYS_TENANT_ID);
         Optional<ComponentDescriptor> result = componentDescriptorDao.saveIfNotExist(tenantId, component);
         return result.orElseGet(() -> componentDescriptorDao.findByClazz(tenantId, component.getClazz()));
     }
@@ -88,35 +90,19 @@ public class BaseComponentDescriptorService implements ComponentDescriptorServic
 
     @Override
     public boolean validate(TenantId tenantId, ComponentDescriptor component, JsonNode configuration) {
-        JsonValidator validator = JsonSchemaFactory.byDefault().getValidator();
         try {
             if (!component.getConfigurationDescriptor().has("schema")) {
                 throw new DataValidationException("Configuration descriptor doesn't contain schema property!");
             }
             JsonNode configurationSchema = component.getConfigurationDescriptor().get("schema");
-            ProcessingReport report = validator.validate(configurationSchema, configuration);
-            return report.isSuccess();
-        } catch (ProcessingException e) {
+
+            JsonSchemaFactory factory = JsonSchemaFactory.getInstance(SpecVersion.VersionFlag.V4);
+            JsonSchema schema = factory.getSchema(configurationSchema);
+
+            Set<ValidationMessage> validationMessages = schema.validate(configuration);
+            return validationMessages.isEmpty();
+        } catch (Exception e) {
             throw new IncorrectParameterException(e.getMessage(), e);
         }
     }
-
-    private DataValidator<ComponentDescriptor> componentValidator =
-            new DataValidator<ComponentDescriptor>() {
-                @Override
-                protected void validateDataImpl(TenantId tenantId, ComponentDescriptor plugin) {
-                    if (plugin.getType() == null) {
-                        throw new DataValidationException("Component type should be specified!");
-                    }
-                    if (plugin.getScope() == null) {
-                        throw new DataValidationException("Component scope should be specified!");
-                    }
-                    if (StringUtils.isEmpty(plugin.getName())) {
-                        throw new DataValidationException("Component name should be specified!");
-                    }
-                    if (StringUtils.isEmpty(plugin.getClazz())) {
-                        throw new DataValidationException("Component clazz should be specified!");
-                    }
-                }
-            };
 }

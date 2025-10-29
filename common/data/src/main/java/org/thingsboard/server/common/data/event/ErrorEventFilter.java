@@ -1,5 +1,5 @@
 /**
- * Copyright © 2016-2021 The Thingsboard Authors
+ * Copyright © 2016-2025 The Thingsboard Authors
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -15,14 +15,20 @@
  */
 package org.thingsboard.server.common.data.event;
 
+import io.swagger.v3.oas.annotations.media.Schema;
 import lombok.Data;
 import org.thingsboard.server.common.data.StringUtils;
 
 @Data
+@Schema
 public class ErrorEventFilter implements EventFilter {
-    private String server;
-    private String method;
-    private String error;
+
+    @Schema(description = "String value representing the server name, identifier or ip address where the platform is running", example = "ip-172-31-24-152")
+    protected String server;
+    @Schema(description = "String value representing the method name when the error happened", example = "onClusterEventMsg")
+    protected String method;
+    @Schema(description = "The case insensitive 'contains' filter based on error message", example = "not present in the DB")
+    protected String errorStr;
 
     @Override
     public EventType getEventType() {
@@ -30,7 +36,7 @@ public class ErrorEventFilter implements EventFilter {
     }
 
     @Override
-    public boolean hasFilterForJsonBody() {
-        return !StringUtils.isEmpty(server) || !StringUtils.isEmpty(method) || !StringUtils.isEmpty(error);
+    public boolean isNotEmpty() {
+        return !StringUtils.isEmpty(server) || !StringUtils.isEmpty(method) || !StringUtils.isEmpty(errorStr);
     }
 }

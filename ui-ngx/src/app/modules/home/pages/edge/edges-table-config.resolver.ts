@@ -1,5 +1,5 @@
 ///
-/// Copyright © 2016-2021 The Thingsboard Authors
+/// Copyright © 2016-2025 The Thingsboard Authors
 ///
 /// Licensed under the Apache License, Version 2.0 (the "License");
 /// you may not use this file except in compliance with the License.
@@ -16,7 +16,7 @@
 
 import { Injectable } from '@angular/core';
 
-import { ActivatedRouteSnapshot, Resolve, Router } from '@angular/router';
+import { ActivatedRouteSnapshot, Router } from '@angular/router';
 import {
   CellActionDescriptor,
   checkBoxCell,
@@ -29,10 +29,10 @@ import {
 import { TranslateService } from '@ngx-translate/core';
 import { DatePipe } from '@angular/common';
 import { EntityType, entityTypeResources, entityTypeTranslations } from '@shared/models/entity-type.models';
-import { EntityAction } from '@home/models/entity/entity-component.models';
+import { AddEntityDialogData, EntityAction } from '@home/models/entity/entity-component.models';
 import { forkJoin, Observable, of } from 'rxjs';
 import { select, Store } from '@ngrx/store';
-import { selectAuthUser } from '@core/auth/auth.selectors';
+import { selectAuthUser, selectUserSettingsProperty } from '@core/auth/auth.selectors';
 import { map, mergeMap, take, tap } from 'rxjs/operators';
 import { AppState } from '@core/core.state';
 import { Authority } from '@app/shared/models/authority.enum';
@@ -58,9 +58,14 @@ import { EdgeTableHeaderComponent } from '@home/pages/edge/edge-table-header.com
 import { EdgeId } from '@shared/models/id/edge-id';
 import { EdgeTabsComponent } from '@home/pages/edge/edge-tabs.component';
 import { ActionNotificationShow } from '@core/notification/notification.actions';
+import {
+  EdgeInstructionsDialogComponent,
+  EdgeInstructionsDialogData
+} from '@home/pages/edge/edge-instructions-dialog.component';
+import { AddEntityDialogComponent } from '@home/components/entity/add-entity-dialog.component';
 
 @Injectable()
-export class EdgesTableConfigResolver implements Resolve<EntityTableConfig<EdgeInfo>> {
+export class EdgesTableConfigResolver  {
 
   private readonly config: EntityTableConfig<EdgeInfo> = new EntityTableConfig<EdgeInfo>();
   private customerId: string;
@@ -96,7 +101,7 @@ export class EdgesTableConfigResolver implements Resolve<EntityTableConfig<EdgeI
         mergeMap((savedEdge) => this.edgeService.getEdgeInfo(savedEdge.id.id)
         ));
     };
-    this.config.onEntityAction = action => this.onEdgeAction(action);
+    this.config.onEntityAction = action => this.onEdgeAction(action, this.config);
     this.config.detailsReadonly = () => this.config.componentsData.edgeScope === 'customer_user';
     this.config.headerComponent = EdgeTableHeaderComponent;
   }
@@ -136,6 +141,7 @@ export class EdgesTableConfigResolver implements Resolve<EntityTableConfig<EdgeI
         this.config.addEnabled = this.config.componentsData.edgeScope !== 'customer_user';
         this.config.entitiesDeleteEnabled = this.config.componentsData.edgeScope === 'tenant';
         this.config.deleteEnabled = () => this.config.componentsData.edgeScope === 'tenant';
+        this.config.addEntity = () => { this.addEdge(); return of(null); };
         return this.config;
       })
     );
@@ -207,31 +213,31 @@ export class EdgesTableConfigResolver implements Resolve<EntityTableConfig<EdgeI
           onAction: ($event, entity) => this.unassignFromCustomer($event, entity)
         },
         {
-          name: this.translate.instant('edge.manage-edge-assets'),
+          name: this.translate.instant('edge.manage-assets'),
           icon: 'domain',
           isEnabled: (entity) => true,
           onAction: ($event, entity) => this.openEdgeEntitiesByType($event, entity, EntityType.ASSET)
         },
         {
-          name: this.translate.instant('edge.manage-edge-devices'),
+          name: this.translate.instant('edge.manage-devices'),
           icon: 'devices_other',
           isEnabled: (entity) => true,
           onAction: ($event, entity) => this.openEdgeEntitiesByType($event, entity, EntityType.DEVICE)
         },
         {
-          name: this.translate.instant('edge.manage-edge-entity-views'),
+          name: this.translate.instant('edge.manage-entity-views'),
           icon: 'view_quilt',
           isEnabled: (entity) => true,
           onAction: ($event, entity) => this.openEdgeEntitiesByType($event, entity, EntityType.ENTITY_VIEW)
         },
         {
-          name: this.translate.instant('edge.manage-edge-dashboards'),
+          name: this.translate.instant('edge.manage-dashboards'),
           icon: 'dashboard',
           isEnabled: (entity) => true,
           onAction: ($event, entity) => this.openEdgeEntitiesByType($event, entity, EntityType.DASHBOARD)
         },
         {
-          name: this.translate.instant('edge.manage-edge-rulechains'),
+          name: this.translate.instant('edge.manage-rulechains'),
           icon: 'settings_ethernet',
           isEnabled: (entity) => true,
           onAction: ($event, entity) => this.openEdgeEntitiesByType($event, entity, EntityType.RULE_CHAIN)
@@ -257,25 +263,25 @@ export class EdgesTableConfigResolver implements Resolve<EntityTableConfig<EdgeI
     if (edgeScope === 'customer_user') {
       actions.push(
         {
-          name: this.translate.instant('edge.manage-edge-assets'),
+          name: this.translate.instant('edge.manage-assets'),
           icon: 'domain',
           isEnabled: (entity) => true,
           onAction: ($event, entity) => this.openEdgeEntitiesByType($event, entity, EntityType.ASSET)
         },
         {
-          name: this.translate.instant('edge.manage-edge-devices'),
+          name: this.translate.instant('edge.manage-devices'),
           icon: 'devices_other',
           isEnabled: (entity) => true,
           onAction: ($event, entity) => this.openEdgeEntitiesByType($event, entity, EntityType.DEVICE)
         },
         {
-          name: this.translate.instant('edge.manage-edge-entity-views'),
+          name: this.translate.instant('edge.manage-entity-views'),
           icon: 'view_quilt',
           isEnabled: (entity) => true,
           onAction: ($event, entity) => this.openEdgeEntitiesByType($event, entity, EntityType.ENTITY_VIEW)
         },
         {
-          name: this.translate.instant('edge.manage-edge-dashboards'),
+          name: this.translate.instant('edge.manage-dashboards'),
           icon: 'dashboard',
           isEnabled: (entity) => true,
           onAction: ($event, entity) => this.openEdgeEntitiesByType($event, entity, EntityType.DASHBOARD)
@@ -318,7 +324,7 @@ export class EdgesTableConfigResolver implements Resolve<EntityTableConfig<EdgeI
           name: this.translate.instant('edge.add-edge-text'),
           icon: 'insert_drive_file',
           isEnabled: () => true,
-          onAction: ($event) => this.config.table.addEntity($event)
+          onAction: ($event) => this.config.getTable().addEntity($event)
         },
         {
           name: this.translate.instant('edge.import'),
@@ -345,7 +351,7 @@ export class EdgesTableConfigResolver implements Resolve<EntityTableConfig<EdgeI
     this.homeDialogs.importEntities(EntityType.EDGE).subscribe((res) => {
       if (res) {
         this.broadcast.broadcast('edgeSaved');
-        this.config.table.updateData();
+        this.config.updateData();
       }
     });
   }
@@ -365,9 +371,17 @@ export class EdgesTableConfigResolver implements Resolve<EntityTableConfig<EdgeI
     }).afterClosed()
       .subscribe((res) => {
         if (res) {
-          this.config.table.updateData();
+          this.config.updateData();
         }
       });
+  }
+
+  private openEdge($event: Event, edge: Edge, config: EntityTableConfig<EdgeInfo>) {
+    if ($event) {
+      $event.stopPropagation();
+    }
+    const url = this.router.createUrlTree([edge.id.id], {relativeTo: config.getActivatedRoute()});
+    this.router.navigateByUrl(url);
   }
 
   makePublic($event: Event, edge: Edge) {
@@ -384,7 +398,7 @@ export class EdgesTableConfigResolver implements Resolve<EntityTableConfig<EdgeI
         if (res) {
           this.edgeService.makeEdgePublic(edge.id.id).subscribe(
             () => {
-              this.config.table.updateData();
+              this.config.updateData();
             }
           );
         }
@@ -417,7 +431,7 @@ export class EdgesTableConfigResolver implements Resolve<EntityTableConfig<EdgeI
         suffix = 'ruleChains';
         break;
     }
-    this.router.navigateByUrl(`edges/${edge.id.id}/${suffix}`);
+    this.router.navigateByUrl(`edgeManagement/instances/${edge.id.id}/${suffix}`);
   }
 
   assignToCustomer($event: Event, edgesIds: Array<EdgeId>) {
@@ -435,7 +449,7 @@ export class EdgesTableConfigResolver implements Resolve<EntityTableConfig<EdgeI
     }).afterClosed()
       .subscribe((res) => {
         if (res) {
-          this.config.table.updateData();
+          this.config.updateData();
         }
       });
   }
@@ -464,7 +478,7 @@ export class EdgesTableConfigResolver implements Resolve<EntityTableConfig<EdgeI
         if (res) {
           this.edgeService.unassignEdgeFromCustomer(edge.id.id).subscribe(
             () => {
-              this.config.table.updateData();
+              this.config.updateData(this.config.componentsData.edgeScope !== 'tenant');
             }
           );
         }
@@ -492,7 +506,7 @@ export class EdgesTableConfigResolver implements Resolve<EntityTableConfig<EdgeI
           );
           forkJoin(tasks).subscribe(
             () => {
-              this.config.table.updateData();
+              this.config.updateData();
             }
           );
         }
@@ -518,8 +532,58 @@ export class EdgesTableConfigResolver implements Resolve<EntityTableConfig<EdgeI
     );
   }
 
-  onEdgeAction(action: EntityAction<EdgeInfo>): boolean {
+  addEdge() {
+    this.dialog.open<AddEntityDialogComponent, AddEntityDialogData<EdgeInfo>,
+      EdgeInfo>(AddEntityDialogComponent, {
+      disableClose: true,
+      panelClass: ['tb-dialog', 'tb-fullscreen-dialog'],
+      data: {
+        entitiesTableConfig: this.config
+      }
+    }).afterClosed().subscribe(
+      (entity) => {
+        if (entity) {
+          this.store.pipe(select(selectUserSettingsProperty('notDisplayInstructionsAfterAddEdge'))).pipe(
+            take(1)
+          ).subscribe((settings: boolean) => {
+            if (!settings) {
+              this.openInstructions(null, entity, true);
+            } else {
+              this.config.updateData();
+              this.config.entityAdded(entity);
+            }
+          });
+        }
+      }
+    );
+  }
+
+  openInstructions($event: Event, edge: EdgeInfo, afterAdd = false, upgradeAvailable = false) {
+    if ($event) {
+      $event.stopPropagation();
+    }
+    this.dialog.open<EdgeInstructionsDialogComponent, EdgeInstructionsDialogData>
+    (EdgeInstructionsDialogComponent, {
+      disableClose: true,
+      panelClass: ['tb-dialog', 'tb-fullscreen-dialog'],
+      data: {
+        edge,
+        afterAdd,
+        upgradeAvailable
+      }
+    }).afterClosed().subscribe(() => {
+        if (afterAdd) {
+          this.config.updateData();
+        }
+      }
+    );
+  }
+
+  onEdgeAction(action: EntityAction<EdgeInfo>, config: EntityTableConfig<EdgeInfo>): boolean {
     switch (action.action) {
+      case 'open':
+        this.openEdge(action.event, action.entity, config);
+        return true;
       case 'makePublic':
         this.makePublic(action.event, action.entity);
         return true;
@@ -546,6 +610,12 @@ export class EdgesTableConfigResolver implements Resolve<EntityTableConfig<EdgeI
         return true;
       case 'syncEdge':
         this.syncEdge(action.event, action.entity);
+        return true;
+      case 'openInstallInstructions':
+        this.openInstructions(action.event, action.entity);
+        return true;
+      case 'openUpgradeInstructions':
+        this.openInstructions(action.event, action.entity, false, true);
         return true;
     }
   }

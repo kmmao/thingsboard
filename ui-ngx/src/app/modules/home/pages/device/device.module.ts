@@ -1,5 +1,5 @@
 ///
-/// Copyright © 2016-2021 The Thingsboard Authors
+/// Copyright © 2016-2025 The Thingsboard Authors
 ///
 /// Licensed under the Apache License, Version 2.0 (the "License");
 /// you may not use this file except in compliance with the License.
@@ -33,6 +33,9 @@ import { MqttDeviceTransportConfigurationComponent } from './data/mqtt-device-tr
 import { CoapDeviceTransportConfigurationComponent } from './data/coap-device-transport-configuration.component';
 import { Lwm2mDeviceTransportConfigurationComponent } from './data/lwm2m-device-transport-configuration.component';
 import { SnmpDeviceTransportConfigurationComponent } from './data/snmp-device-transport-configuration.component';
+import { DeviceCredentialsModule } from '@home/components/device/device-credentials.module';
+import { DeviceProfileCommonModule } from '@home/components/profile/device/common/device-profile-common.module';
+import { DeviceCheckConnectivityDialogComponent } from './device-check-connectivity-dialog.component';
 
 @NgModule({
   declarations: [
@@ -48,13 +51,16 @@ import { SnmpDeviceTransportConfigurationComponent } from './data/snmp-device-tr
     DeviceComponent,
     DeviceTabsComponent,
     DeviceTableHeaderComponent,
-    DeviceCredentialsDialogComponent
+    DeviceCredentialsDialogComponent,
+    DeviceCheckConnectivityDialogComponent
   ],
   imports: [
     CommonModule,
     SharedModule,
     HomeComponentsModule,
     HomeDialogsModule,
+    DeviceCredentialsModule,
+    DeviceProfileCommonModule,
     DeviceRoutingModule
   ]
 })

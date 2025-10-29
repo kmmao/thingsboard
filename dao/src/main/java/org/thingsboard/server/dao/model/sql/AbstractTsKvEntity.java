@@ -1,5 +1,5 @@
 /**
- * Copyright © 2016-2021 The Thingsboard Authors
+ * Copyright © 2016-2025 The Thingsboard Authors
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -15,7 +15,12 @@
  */
 package org.thingsboard.server.dao.model.sql;
 
+import jakarta.persistence.Column;
+import jakarta.persistence.Id;
+import jakarta.persistence.MappedSuperclass;
+import jakarta.persistence.Transient;
 import lombok.Data;
+import org.thingsboard.server.common.data.kv.AggTsKvEntry;
 import org.thingsboard.server.common.data.kv.BasicTsKvEntry;
 import org.thingsboard.server.common.data.kv.BooleanDataEntry;
 import org.thingsboard.server.common.data.kv.DoubleDataEntry;
@@ -26,10 +31,6 @@ import org.thingsboard.server.common.data.kv.StringDataEntry;
 import org.thingsboard.server.common.data.kv.TsKvEntry;
 import org.thingsboard.server.dao.model.ToData;
 
-import javax.persistence.Column;
-import javax.persistence.Id;
-import javax.persistence.MappedSuperclass;
-import javax.persistence.Transient;
 import java.util.UUID;
 
 import static org.thingsboard.server.dao.model.ModelConstants.BOOLEAN_VALUE_COLUMN;
@@ -58,7 +59,6 @@ public abstract class AbstractTsKvEntity implements ToData<TsKvEntry> {
     @Column(name = KEY_COLUMN)
     protected int key;
 
-    @Id
     @Column(name = TS_COLUMN)
     protected Long ts;
 
@@ -79,6 +79,18 @@ public abstract class AbstractTsKvEntity implements ToData<TsKvEntry> {
 
     @Transient
     protected String strKey;
+
+    @Transient
+    protected Long aggValuesLastTs;
+    @Transient
+    protected Long aggValuesCount;
+
+    public AbstractTsKvEntity() {
+    }
+
+    public AbstractTsKvEntity(Long aggValuesLastTs) {
+        this.aggValuesLastTs = aggValuesLastTs;
+    }
 
     public abstract boolean isNotEmpty();
 
@@ -105,7 +117,15 @@ public abstract class AbstractTsKvEntity implements ToData<TsKvEntry> {
         } else if (jsonValue != null) {
             kvEntry = new JsonDataEntry(strKey, jsonValue);
         }
-        return new BasicTsKvEntry(ts, kvEntry);
+
+        if (aggValuesCount == null) {
+            return new BasicTsKvEntry(ts, kvEntry, getVersion());
+        } else {
+            return new AggTsKvEntry(ts, kvEntry, aggValuesCount);
+        }
     }
 
+    public Long getVersion() {
+        return null;
+    }
 }

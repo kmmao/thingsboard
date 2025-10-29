@@ -1,5 +1,5 @@
 /**
- * Copyright © 2016-2021 The Thingsboard Authors
+ * Copyright © 2016-2025 The Thingsboard Authors
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -17,61 +17,64 @@ package org.thingsboard.server.dao.service;
 
 import com.fasterxml.jackson.databind.JsonNode;
 import lombok.extern.slf4j.Slf4j;
-import org.hibernate.validator.HibernateValidator;
-import org.hibernate.validator.HibernateValidatorConfiguration;
-import org.hibernate.validator.cfg.ConstraintMapping;
+import org.apache.commons.io.FileUtils;
+import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.context.annotation.Lazy;
 import org.thingsboard.server.common.data.BaseData;
+import org.thingsboard.server.common.data.DataConstants;
 import org.thingsboard.server.common.data.EntityType;
+import org.thingsboard.server.common.data.StringUtils;
+import org.thingsboard.server.common.data.id.EntityId;
 import org.thingsboard.server.common.data.id.TenantId;
-import org.thingsboard.server.common.data.tenant.profile.DefaultTenantProfileConfiguration;
-import org.thingsboard.server.common.data.validation.NoXss;
-import org.thingsboard.server.dao.TenantEntityDao;
 import org.thingsboard.server.dao.TenantEntityWithDataDao;
 import org.thingsboard.server.dao.exception.DataValidationException;
+import org.thingsboard.server.dao.exception.EntitiesLimitException;
+import org.thingsboard.server.dao.usagerecord.ApiLimitService;
 
-import javax.validation.ConstraintViolation;
-import javax.validation.Validation;
-import javax.validation.Validator;
 import java.util.HashSet;
 import java.util.Iterator;
-import java.util.List;
 import java.util.Set;
 import java.util.function.Function;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
-import java.util.stream.Collectors;
 
 @Slf4j
 public abstract class DataValidator<D extends BaseData<?>> {
     private static final Pattern EMAIL_PATTERN =
-            Pattern.compile("^[A-Z0-9._%+-]+@[A-Z0-9.-]+\\.[A-Z]{2,}$", Pattern.CASE_INSENSITIVE);
+            Pattern.compile("^[A-Z0-9_!#$%&'*+/=?`{|}~^.-]+@[A-Z0-9.-]+\\.[A-Z]{2,}$", Pattern.CASE_INSENSITIVE);
 
-    private static Validator fieldsValidator;
+    private static final Pattern QUEUE_PATTERN = Pattern.compile("^[a-zA-Z0-9_.\\-]+$");
+    private static final String DOMAIN_REGEX = "^(((?!-))(xn--|_)?[a-z0-9-]{0,61}[a-z0-9]{1,1}\\.)*(xn--)?([a-z0-9][a-z0-9\\-]{0,60}|[a-z0-9-]{1,30}\\.[a-z]{2,})$";
+    private static final Pattern DOMAIN_PATTERN = Pattern.compile(DOMAIN_REGEX);
+    private static final String LOCALHOST_REGEX = "^localhost(:\\d{1,5})?$";
+    private static final Pattern LOCALHOST_PATTERN = Pattern.compile(LOCALHOST_REGEX);
+    private static final String NAME = "name";
+    private static final String TOPIC = "topic";
 
-    static {
-        initializeFieldsValidator();
-    }
+    @Autowired @Lazy
+    private ApiLimitService apiLimitService;
 
-    public void validate(D data, Function<D, TenantId> tenantIdFunction) {
+    // Returns old instance of the same object that is fetched during validation.
+    public D validate(D data, Function<D, TenantId> tenantIdFunction) {
         try {
             if (data == null) {
                 throw new DataValidationException("Data object can't be null!");
             }
 
-            List<String> validationErrors = validateFields(data);
-            if (!validationErrors.isEmpty()) {
-                throw new IllegalArgumentException("Validation error: " + String.join(", ", validationErrors));
-            }
+            ConstraintValidator.validateFields(data);
 
             TenantId tenantId = tenantIdFunction.apply(data);
             validateDataImpl(tenantId, data);
+            D old;
             if (data.getId() == null) {
                 validateCreate(tenantId, data);
+                old = null;
             } else {
-                validateUpdate(tenantId, data);
+                old = validateUpdate(tenantId, data);
             }
+            return old;
         } catch (DataValidationException e) {
-            log.error("Data object is invalid: [{}]", e.getMessage());
+            log.error("{} object is invalid: [{}]", data == null ? "Data" : data.getClass().getSimpleName(), e.getMessage());
             throw e;
         }
     }
@@ -82,7 +85,20 @@ public abstract class DataValidator<D extends BaseData<?>> {
     protected void validateCreate(TenantId tenantId, D data) {
     }
 
-    protected void validateUpdate(TenantId tenantId, D data) {
+    protected D validateUpdate(TenantId tenantId, D data) {
+        return null;
+    }
+
+    public void validateDelete(TenantId tenantId, EntityId entityId) {
+    }
+
+    public void validateString(String exceptionPrefix, String name) {
+        if (StringUtils.isEmpty(name) || name.trim().length() == 0) {
+            throw new DataValidationException(exceptionPrefix + " should be specified!");
+        }
+        if (StringUtils.contains0x00(name)) {
+            throw new DataValidationException(exceptionPrefix + " should not contain 0x00 symbol!");
+        }
     }
 
     protected boolean isSameData(D existentData, D actualData) {
@@ -95,7 +111,7 @@ public abstract class DataValidator<D extends BaseData<?>> {
         }
     }
 
-    private static boolean doValidateEmail(String email) {
+    public static boolean doValidateEmail(String email) {
         if (email == null) {
             return false;
         }
@@ -104,36 +120,21 @@ public abstract class DataValidator<D extends BaseData<?>> {
         return emailMatcher.matches();
     }
 
-    private List<String> validateFields(D data) {
-        Set<ConstraintViolation<D>> constraintsViolations = fieldsValidator.validate(data);
-        return constraintsViolations.stream()
-                .map(ConstraintViolation::getMessage)
-                .distinct()
-                .collect(Collectors.toList());
-    }
-
     protected void validateNumberOfEntitiesPerTenant(TenantId tenantId,
-                                                     TenantEntityDao tenantEntityDao,
-                                                     long maxEntities,
                                                      EntityType entityType) {
-        if (maxEntities > 0) {
-            long currentEntitiesCount = tenantEntityDao.countByTenantId(tenantId);
-            if (currentEntitiesCount >= maxEntities) {
-                throw new DataValidationException(String.format("Can't create more then %d %ss!",
-                        maxEntities, entityType.name().toLowerCase().replaceAll("_", " ")));
-            }
+        if (!apiLimitService.checkEntitiesLimit(tenantId, entityType)) {
+            throw new EntitiesLimitException(tenantId, entityType);
         }
     }
 
     protected void validateMaxSumDataSizePerTenant(TenantId tenantId,
-                                                     TenantEntityWithDataDao dataDao,
-                                                     long maxSumDataSize,
-                                                     long currentDataSize,
-                                                     EntityType entityType) {
+                                                   TenantEntityWithDataDao dataDao,
+                                                   long maxSumDataSize,
+                                                   long currentDataSize,
+                                                   EntityType entityType) {
         if (maxSumDataSize > 0) {
             if (dataDao.sumDataSizeByTenantId(tenantId) + currentDataSize > maxSumDataSize) {
-                throw new DataValidationException(String.format("Failed to create the %s, files size limit is exhausted %d bytes!",
-                        entityType.name().toLowerCase().replaceAll("_", " "), maxSumDataSize));
+                throw new DataValidationException(String.format("%ss total size exceeds the maximum of " + FileUtils.byteCountToDisplaySize(maxSumDataSize), entityType.getNormalName()));
             }
         }
     }
@@ -156,12 +157,35 @@ public abstract class DataValidator<D extends BaseData<?>> {
         }
     }
 
-    private static void initializeFieldsValidator() {
-        HibernateValidatorConfiguration validatorConfiguration = Validation.byProvider(HibernateValidator.class).configure();
-        ConstraintMapping constraintMapping = validatorConfiguration.createConstraintMapping();
-        constraintMapping.constraintDefinition(NoXss.class).validatedBy(NoXssValidator.class);
-        validatorConfiguration.addMapping(constraintMapping);
-
-        fieldsValidator = validatorConfiguration.buildValidatorFactory().getValidator();
+    protected static void validateQueueName(String name) {
+        validateQueueNameOrTopic(name, NAME);
+        if (DataConstants.CF_QUEUE_NAME.equals(name) || DataConstants.CF_STATES_QUEUE_NAME.equals(name)) {
+            throw new DataValidationException(String.format("The queue name '%s' is not allowed. This name is reserved for internal use. Please choose a different name.", name));
+        }
     }
+
+    protected static void validateQueueTopic(String topic) {
+        validateQueueNameOrTopic(topic, TOPIC);
+    }
+
+    static void validateQueueNameOrTopic(String value, String fieldName) {
+        if (StringUtils.isEmpty(value) || value.trim().length() == 0) {
+            throw new DataValidationException(String.format("Queue %s should be specified!", fieldName));
+        }
+        if (!QUEUE_PATTERN.matcher(value).matches()) {
+            throw new DataValidationException(
+                    String.format("Queue %s contains a character other than ASCII alphanumerics, '.', '_' and '-'!", fieldName));
+        }
+    }
+
+    public static boolean isValidDomain(String domainName) {
+        if (domainName == null) {
+            return false;
+        }
+        if (LOCALHOST_PATTERN.matcher(domainName).matches()) {
+            return true;
+        }
+        return DOMAIN_PATTERN.matcher(domainName).matches();
+    }
+
 }

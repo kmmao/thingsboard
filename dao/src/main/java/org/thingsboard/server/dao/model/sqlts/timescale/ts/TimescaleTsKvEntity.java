@@ -1,5 +1,5 @@
 /**
- * Copyright © 2016-2021 The Thingsboard Authors
+ * Copyright © 2016-2025 The Thingsboard Authors
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -15,20 +15,19 @@
  */
 package org.thingsboard.server.dao.model.sqlts.timescale.ts;
 
+import jakarta.persistence.ColumnResult;
+import jakarta.persistence.ConstructorResult;
+import jakarta.persistence.Entity;
+import jakarta.persistence.IdClass;
+import jakarta.persistence.NamedNativeQueries;
+import jakarta.persistence.NamedNativeQuery;
+import jakarta.persistence.SqlResultSetMapping;
+import jakarta.persistence.SqlResultSetMappings;
+import jakarta.persistence.Table;
 import lombok.Data;
 import lombok.EqualsAndHashCode;
-import org.springframework.util.StringUtils;
+import org.thingsboard.server.common.data.StringUtils;
 import org.thingsboard.server.dao.model.sql.AbstractTsKvEntity;
-
-import javax.persistence.ColumnResult;
-import javax.persistence.ConstructorResult;
-import javax.persistence.Entity;
-import javax.persistence.IdClass;
-import javax.persistence.NamedNativeQueries;
-import javax.persistence.NamedNativeQuery;
-import javax.persistence.SqlResultSetMapping;
-import javax.persistence.SqlResultSetMappings;
-import javax.persistence.Table;
 
 import static org.thingsboard.server.dao.sqlts.timescale.AggregationRepository.FIND_AVG;
 import static org.thingsboard.server.dao.sqlts.timescale.AggregationRepository.FIND_AVG_QUERY;
@@ -62,6 +61,7 @@ import static org.thingsboard.server.dao.sqlts.timescale.AggregationRepository.F
                                         @ColumnResult(name = "doubleCountValue", type = Long.class),
                                         @ColumnResult(name = "strValue", type = String.class),
                                         @ColumnResult(name = "aggType", type = String.class),
+                                        @ColumnResult(name = "maxAggTs", type = Long.class),
                                 }
                         ),
                 }),
@@ -78,6 +78,7 @@ import static org.thingsboard.server.dao.sqlts.timescale.AggregationRepository.F
                                         @ColumnResult(name = "longValueCount", type = Long.class),
                                         @ColumnResult(name = "doubleValueCount", type = Long.class),
                                         @ColumnResult(name = "jsonValueCount", type = Long.class),
+                                        @ColumnResult(name = "maxAggTs", type = Long.class),
                                 }
                         )
                 }),
@@ -114,7 +115,8 @@ public final class TimescaleTsKvEntity extends AbstractTsKvEntity {
     public TimescaleTsKvEntity() {
     }
 
-    public TimescaleTsKvEntity(Long tsBucket, Long interval, Long longValue, Double doubleValue, Long longCountValue, Long doubleCountValue, String strValue, String aggType) {
+    public TimescaleTsKvEntity(Long tsBucket, Long interval, Long longValue, Double doubleValue, Long longCountValue, Long doubleCountValue, String strValue, String aggType, Long aggValuesLastTs) {
+        super(aggValuesLastTs);
         if (!StringUtils.isEmpty(strValue)) {
             this.strValue = strValue;
         }
@@ -135,6 +137,7 @@ public final class TimescaleTsKvEntity extends AbstractTsKvEntity {
                     } else {
                         this.doubleValue = 0.0;
                     }
+                    this.aggValuesCount = totalCount;
                     break;
                 case SUM:
                     if (doubleCountValue > 0) {
@@ -157,7 +160,8 @@ public final class TimescaleTsKvEntity extends AbstractTsKvEntity {
         }
     }
 
-    public TimescaleTsKvEntity(Long tsBucket, Long interval, Long booleanValueCount, Long strValueCount, Long longValueCount, Long doubleValueCount, Long jsonValueCount) {
+    public TimescaleTsKvEntity(Long tsBucket, Long interval, Long booleanValueCount, Long strValueCount, Long longValueCount, Long doubleValueCount, Long jsonValueCount, Long aggValuesLastTs) {
+        super(aggValuesLastTs);
         if (!isAllNull(tsBucket, interval, booleanValueCount, strValueCount, longValueCount, doubleValueCount, jsonValueCount)) {
             this.ts = tsBucket + interval / 2;
             if (booleanValueCount != 0) {

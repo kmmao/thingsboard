@@ -1,5 +1,5 @@
 /**
- * Copyright © 2016-2021 The Thingsboard Authors
+ * Copyright © 2016-2025 The Thingsboard Authors
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -16,17 +16,18 @@
 package org.thingsboard.server.common.transport;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
+import jakarta.annotation.PostConstruct;
+import jakarta.annotation.PreDestroy;
 import lombok.Data;
 import lombok.Getter;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.thingsboard.common.util.ThingsBoardExecutors;
 import org.thingsboard.server.cache.ota.OtaPackageDataCache;
+import org.thingsboard.server.common.transport.limits.TransportRateLimitService;
 import org.thingsboard.server.queue.discovery.TbServiceInfoProvider;
 import org.thingsboard.server.queue.scheduler.SchedulerComponent;
 
-import javax.annotation.PostConstruct;
-import javax.annotation.PreDestroy;
 import java.util.concurrent.ExecutorService;
 
 /**
@@ -39,7 +40,7 @@ public abstract class TransportContext {
     protected final ObjectMapper mapper = new ObjectMapper();
 
     @Autowired
-    private TransportService transportService;
+    protected TransportService transportService;
 
     @Autowired
     private TbServiceInfoProvider serviceInfoProvider;
@@ -57,6 +58,9 @@ public abstract class TransportContext {
     @Autowired
     private TransportResourceCache transportResourceCache;
 
+    @Autowired
+    protected TransportRateLimitService rateLimitService;
+
     @PostConstruct
     public void init() {
         executor = ThingsBoardExecutors.newWorkStealingPool(50, getClass());
@@ -72,5 +76,7 @@ public abstract class TransportContext {
     public String getNodeId() {
         return serviceInfoProvider.getServiceId();
     }
+
+
 
 }

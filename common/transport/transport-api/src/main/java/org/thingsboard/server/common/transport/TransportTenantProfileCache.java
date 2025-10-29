@@ -1,5 +1,5 @@
 /**
- * Copyright © 2016-2021 The Thingsboard Authors
+ * Copyright © 2016-2025 The Thingsboard Authors
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -15,13 +15,11 @@
  */
 package org.thingsboard.server.common.transport;
 
-import com.google.protobuf.ByteString;
 import org.thingsboard.server.common.data.TenantProfile;
 import org.thingsboard.server.common.data.id.TenantId;
 import org.thingsboard.server.common.data.id.TenantProfileId;
 import org.thingsboard.server.common.transport.profile.TenantProfileUpdateResult;
-import org.thingsboard.server.queue.discovery.TenantRoutingInfo;
-import org.thingsboard.server.queue.discovery.TenantRoutingInfoService;
+import org.thingsboard.server.gen.transport.TransportProtos;
 
 import java.util.Set;
 
@@ -29,7 +27,7 @@ public interface TransportTenantProfileCache {
 
     TenantProfile get(TenantId tenantId);
 
-    TenantProfileUpdateResult put(ByteString profileBody);
+    TenantProfileUpdateResult put(TransportProtos.TenantProfileProto proto);
 
     boolean put(TenantId tenantId, TenantProfileId profileId);
 

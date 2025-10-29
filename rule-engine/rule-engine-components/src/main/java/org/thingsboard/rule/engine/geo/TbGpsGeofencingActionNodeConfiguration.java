@@ -1,5 +1,5 @@
 /**
- * Copyright © 2016-2021 The Thingsboard Authors
+ * Copyright © 2016-2025 The Thingsboard Authors
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -16,10 +16,8 @@
 package org.thingsboard.rule.engine.geo;
 
 import lombok.Data;
-import org.thingsboard.rule.engine.api.NodeConfiguration;
+import org.thingsboard.common.util.geo.PerimeterType;
 
-import java.util.Collections;
-import java.util.List;
 import java.util.concurrent.TimeUnit;
 
 /**
@@ -34,16 +32,21 @@ public class TbGpsGeofencingActionNodeConfiguration extends TbGpsGeofencingFilte
     private String minInsideDurationTimeUnit;
     private String minOutsideDurationTimeUnit;
 
+    private boolean reportPresenceStatusOnEachMessage;
+
     @Override
     public TbGpsGeofencingActionNodeConfiguration defaultConfiguration() {
         TbGpsGeofencingActionNodeConfiguration configuration = new TbGpsGeofencingActionNodeConfiguration();
         configuration.setLatitudeKeyName("latitude");
         configuration.setLongitudeKeyName("longitude");
+        configuration.setPerimeterType(PerimeterType.POLYGON);
         configuration.setFetchPerimeterInfoFromMessageMetadata(true);
+        configuration.setPerimeterKeyName("ss_perimeter");
         configuration.setMinInsideDurationTimeUnit(TimeUnit.MINUTES.name());
         configuration.setMinOutsideDurationTimeUnit(TimeUnit.MINUTES.name());
         configuration.setMinInsideDuration(1);
         configuration.setMinOutsideDuration(1);
+        configuration.setReportPresenceStatusOnEachMessage(true);
         return configuration;
     }
 }

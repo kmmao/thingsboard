@@ -1,5 +1,5 @@
 /**
- * Copyright © 2016-2021 The Thingsboard Authors
+ * Copyright © 2016-2025 The Thingsboard Authors
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -28,6 +28,10 @@ import com.google.common.util.concurrent.FutureCallback;
 import com.google.common.util.concurrent.Futures;
 import com.google.common.util.concurrent.ListenableFuture;
 import com.google.common.util.concurrent.MoreExecutors;
+import jakarta.annotation.Nullable;
+import jakarta.annotation.PostConstruct;
+import jakarta.annotation.PreDestroy;
+import lombok.Getter;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.beans.factory.annotation.Value;
@@ -40,27 +44,29 @@ import org.thingsboard.server.common.data.kv.Aggregation;
 import org.thingsboard.server.common.data.kv.BaseReadTsKvQuery;
 import org.thingsboard.server.common.data.kv.DataType;
 import org.thingsboard.server.common.data.kv.DeleteTsKvQuery;
+import org.thingsboard.server.common.data.kv.IntervalType;
 import org.thingsboard.server.common.data.kv.KvEntry;
 import org.thingsboard.server.common.data.kv.ReadTsKvQuery;
+import org.thingsboard.server.common.data.kv.ReadTsKvQueryResult;
 import org.thingsboard.server.common.data.kv.TsKvEntry;
+import org.thingsboard.server.common.data.kv.TsKvEntryAggWrapper;
+import org.thingsboard.server.common.data.kv.TsKvQuery;
 import org.thingsboard.server.dao.model.ModelConstants;
 import org.thingsboard.server.dao.nosql.TbResultSet;
 import org.thingsboard.server.dao.nosql.TbResultSetFuture;
 import org.thingsboard.server.dao.sqlts.AggregationTimeseriesDao;
 import org.thingsboard.server.dao.util.NoSqlTsDao;
+import org.thingsboard.server.dao.util.TimeUtils;
 
-import javax.annotation.Nullable;
-import javax.annotation.PostConstruct;
-import javax.annotation.PreDestroy;
 import java.time.Instant;
 import java.time.LocalDateTime;
 import java.time.ZoneOffset;
 import java.time.temporal.ChronoUnit;
 import java.util.ArrayList;
-import java.util.Arrays;
 import java.util.Collections;
 import java.util.List;
 import java.util.Optional;
+import java.util.UUID;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.locks.Lock;
 import java.util.concurrent.locks.ReentrantLock;
@@ -71,6 +77,7 @@ import static com.datastax.oss.driver.api.querybuilder.QueryBuilder.literal;
 /**
  * @author Andrew Shvayka
  */
+@SuppressWarnings("UnstableApiUsage")
 @Component
 @Slf4j
 @NoSqlTsDao
@@ -79,16 +86,36 @@ public class CassandraBaseTimeseriesDao extends AbstractCassandraBaseTimeseriesD
     protected static final int MIN_AGGREGATION_STEP_MS = 1000;
     public static final String ASC_ORDER = "ASC";
     public static final long SECONDS_IN_DAY = TimeUnit.DAYS.toSeconds(1);
-
-    protected static List<Long> FIXED_PARTITION = Arrays.asList(new Long[]{0L});
+    protected static final List<Long> FIXED_PARTITION = List.of(0L);
+    protected static final String INSERT_WITH_NULL = INSERT_INTO + ModelConstants.TS_KV_CF +
+            "(" + ModelConstants.ENTITY_TYPE_COLUMN +
+            "," + ModelConstants.ENTITY_ID_COLUMN +
+            "," + ModelConstants.KEY_COLUMN +
+            "," + ModelConstants.PARTITION_COLUMN +
+            "," + ModelConstants.TS_COLUMN +
+            "," + ModelConstants.BOOLEAN_VALUE_COLUMN +
+            "," + ModelConstants.STRING_VALUE_COLUMN +
+            "," + ModelConstants.LONG_VALUE_COLUMN +
+            "," + ModelConstants.DOUBLE_VALUE_COLUMN +
+            "," + ModelConstants.JSON_VALUE_COLUMN + ")" +
+            " VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?)";
 
     private CassandraTsPartitionsCache cassandraTsPartitionsCache;
 
     @Autowired
     private Environment environment;
 
+    @Getter
     @Value("${cassandra.query.ts_key_value_partitioning}")
     private String partitioning;
+
+    @Getter
+    @Value("${cassandra.query.use_ts_key_value_partitioning_on_read:true}")
+    private boolean useTsKeyValuePartitioningOnRead;
+
+    @Getter
+    @Value("${cassandra.query.use_ts_key_value_partitioning_on_read_max_estimated_partition_count:40}") // 3+ years for MONTHS
+    private int useTsKeyValuePartitioningOnReadMaxEstimatedPartitionCount;
 
     @Value("${cassandra.query.ts_key_value_partitions_max_cache_size:100000}")
     private long partitionsCacheSize;
@@ -108,7 +135,8 @@ public class CassandraBaseTimeseriesDao extends AbstractCassandraBaseTimeseriesD
     private PreparedStatement[] fetchStmtsAsc;
     private PreparedStatement[] fetchStmtsDesc;
     private PreparedStatement deleteStmt;
-    private PreparedStatement deletePartitionStmt;
+    private PreparedStatement saveWithNullStmt;
+    private PreparedStatement saveWithNullWithTtlStmt;
     private final Lock stmtCreationLock = new ReentrantLock();
 
     private boolean isInstall() {
@@ -139,20 +167,10 @@ public class CassandraBaseTimeseriesDao extends AbstractCassandraBaseTimeseriesD
     }
 
     @Override
-    public ListenableFuture<List<TsKvEntry>> findAllAsync(TenantId tenantId, EntityId entityId, List<ReadTsKvQuery> queries) {
-        List<ListenableFuture<List<TsKvEntry>>> futures = queries.stream().map(query -> findAllAsync(tenantId, entityId, query)).collect(Collectors.toList());
-        return Futures.transform(Futures.allAsList(futures), new Function<List<List<TsKvEntry>>, List<TsKvEntry>>() {
-            @Nullable
-            @Override
-            public List<TsKvEntry> apply(@Nullable List<List<TsKvEntry>> results) {
-                if (results == null || results.isEmpty()) {
-                    return null;
-                }
-                return results.stream()
-                        .flatMap(List::stream)
-                        .collect(Collectors.toList());
-            }
-        }, readResultsProcessingExecutor);
+    public ListenableFuture<List<ReadTsKvQueryResult>> findAllAsync(TenantId tenantId, EntityId entityId, List<ReadTsKvQuery> queries) {
+        List<ListenableFuture<ReadTsKvQueryResult>> futures = queries.stream()
+                .map(query -> findAllAsync(tenantId, entityId, query)).collect(Collectors.toList());
+        return Futures.allAsList(futures);
     }
 
     @Override
@@ -161,19 +179,36 @@ public class CassandraBaseTimeseriesDao extends AbstractCassandraBaseTimeseriesD
         ttl = computeTtl(ttl);
         int dataPointDays = tsKvEntry.getDataPoints() * Math.max(1, (int) (ttl / SECONDS_IN_DAY));
         long partition = toPartitionTs(tsKvEntry.getTs());
+        String entityType = entityId.getEntityType().name();
+        UUID entityIdId = entityId.getId();
+        String entryKey = tsKvEntry.getKey();
+        long ts = tsKvEntry.getTs();
         DataType type = tsKvEntry.getDataType();
+        BoundStatementBuilder stmtBuilder;
         if (setNullValuesEnabled) {
-            processSetNullValues(tenantId, entityId, tsKvEntry, ttl, futures, partition, type);
-        }
-        BoundStatementBuilder stmtBuilder = new BoundStatementBuilder((ttl == 0 ? getSaveStmt(type) : getSaveTtlStmt(type)).bind());
-        stmtBuilder.setString(0, entityId.getEntityType().name())
-                .setUuid(1, entityId.getId())
-                .setString(2, tsKvEntry.getKey())
-                .setLong(3, partition)
-                .setLong(4, tsKvEntry.getTs());
-        addValue(tsKvEntry, stmtBuilder, 5);
-        if (ttl > 0) {
-            stmtBuilder.setInt(6, (int) ttl);
+            Boolean booleanValue = tsKvEntry.getBooleanValue().orElse(null);
+            String strValue = tsKvEntry.getStrValue().orElse(null);
+            Long longValue = tsKvEntry.getLongValue().orElse(null);
+            Double doubleValue = tsKvEntry.getDoubleValue().orElse(null);
+            String jsonValue = tsKvEntry.getJsonValue().orElse(null);
+            if (ttl == 0) {
+                stmtBuilder = new BoundStatementBuilder(getSaveWithNullStmt()
+                        .bind(entityType, entityIdId, entryKey, partition, ts, booleanValue, strValue, longValue, doubleValue, jsonValue));
+            } else {
+                stmtBuilder = new BoundStatementBuilder(getSaveWithNullWithTtlStmt()
+                        .bind(entityType, entityIdId, entryKey, partition, ts, booleanValue, strValue, longValue, doubleValue, jsonValue, (int) ttl));
+            }
+        } else {
+            stmtBuilder = new BoundStatementBuilder((ttl == 0 ? getSaveStmt(type) : getSaveTtlStmt(type)).bind());
+            stmtBuilder.setString(0, entityType)
+                    .setUuid(1, entityIdId)
+                    .setString(2, entryKey)
+                    .setLong(3, partition)
+                    .setLong(4, ts);
+            addValue(tsKvEntry, stmtBuilder, 5);
+            if (ttl > 0) {
+                stmtBuilder.setInt(6, (int) ttl);
+            }
         }
         BoundStatement stmt = stmtBuilder.build();
         futures.add(getFuture(executeAsyncWrite(tenantId, stmt), rs -> null));
@@ -181,11 +216,14 @@ public class CassandraBaseTimeseriesDao extends AbstractCassandraBaseTimeseriesD
     }
 
     @Override
-    public ListenableFuture<Integer> savePartition(TenantId tenantId, EntityId entityId, long tsKvEntryTs, String key, long ttl) {
+    public ListenableFuture<Integer> savePartition(TenantId tenantId, EntityId entityId, long tsKvEntryTs, String key) {
         if (isFixedPartitioning()) {
             return Futures.immediateFuture(null);
         }
-        ttl = computeTtl(ttl);
+        // DO NOT apply custom TTL to partition, otherwise, short TTL will remove partition too early
+        // partitions must remain in the DB forever or be removed only by systemTtl
+        // removal of empty partition is too expensive (we need to scan all data keys for these partitions with ALLOW FILTERING)
+        long ttl = computeTtl(0);
         long partition = toPartitionTs(tsKvEntryTs);
         if (cassandraTsPartitionsCache == null) {
             return doSavePartition(tenantId, entityId, key, ttl, partition);
@@ -206,10 +244,8 @@ public class CassandraBaseTimeseriesDao extends AbstractCassandraBaseTimeseriesD
         long minPartition = toPartitionTs(query.getStartTs());
         long maxPartition = toPartitionTs(query.getEndTs());
 
-        TbResultSetFuture partitionsFuture = fetchPartitions(tenantId, entityId, query.getKey(), minPartition, maxPartition);
-
         final SimpleListenableFuture<Void> resultFuture = new SimpleListenableFuture<>();
-        final ListenableFuture<List<Long>> partitionsListFuture = Futures.transformAsync(partitionsFuture, getPartitionsArrayFunction(), readResultsProcessingExecutor);
+        final ListenableFuture<List<Long>> partitionsListFuture = getPartitionsFuture(tenantId, query, entityId, minPartition, maxPartition);
 
         Futures.addCallback(partitionsListFuture, new FutureCallback<List<Long>>() {
             @Override
@@ -227,74 +263,65 @@ public class CassandraBaseTimeseriesDao extends AbstractCassandraBaseTimeseriesD
     }
 
     @Override
-    public ListenableFuture<Void> removePartition(TenantId tenantId, EntityId entityId, DeleteTsKvQuery query) {
-        long minPartition = toPartitionTs(query.getStartTs());
-        long maxPartition = toPartitionTs(query.getEndTs());
-        if (minPartition == maxPartition) {
-            return Futures.immediateFuture(null);
+    public ListenableFuture<ReadTsKvQueryResult> findAllAsync(TenantId tenantId, EntityId entityId, ReadTsKvQuery query) {
+        var aggParams = query.getAggParameters();
+        if (Aggregation.NONE.equals(aggParams.getAggregation())) {
+            return findAllAsyncWithLimit(tenantId, entityId, query);
         } else {
-            TbResultSetFuture partitionsFuture = fetchPartitions(tenantId, entityId, query.getKey(), minPartition, maxPartition);
-
-            final SimpleListenableFuture<Void> resultFuture = new SimpleListenableFuture<>();
-            final ListenableFuture<List<Long>> partitionsListFuture = Futures.transformAsync(partitionsFuture, getPartitionsArrayFunction(), readResultsProcessingExecutor);
-
-            Futures.addCallback(partitionsListFuture, new FutureCallback<List<Long>>() {
-                @Override
-                public void onSuccess(@Nullable List<Long> partitions) {
-                    int index = 0;
-                    if (minPartition != query.getStartTs()) {
-                        index = 1;
-                    }
-                    List<Long> partitionsToDelete = new ArrayList<>();
-                    for (int i = index; i < partitions.size() - 1; i++) {
-                        partitionsToDelete.add(partitions.get(i));
-                    }
-                    QueryCursor cursor = new QueryCursor(entityId.getEntityType().name(), entityId.getId(), query, partitionsToDelete);
-                    deletePartitionAsync(tenantId, cursor, resultFuture);
+            long startPeriod = query.getStartTs();
+            long endPeriod = Math.max(query.getStartTs() + 1, query.getEndTs());
+            List<ListenableFuture<Optional<TsKvEntryAggWrapper>>> futures = new ArrayList<>();
+            var intervalType = aggParams.getIntervalType();
+            while (startPeriod < endPeriod) {
+                long startTs = startPeriod;
+                long endTs;
+                if (IntervalType.MILLISECONDS.equals(intervalType)) {
+                    endTs = startPeriod + Math.max(query.getInterval(), MIN_AGGREGATION_STEP_MS);
+                } else {
+                    endTs = TimeUtils.calculateIntervalEnd(startTs, aggParams.getIntervalType(), aggParams.getTzId());
                 }
-
+                endTs = Math.min(endTs, endPeriod);
+                ReadTsKvQuery subQuery = new BaseReadTsKvQuery(query.getKey(), startTs, endTs, endTs - startTs, 1, query.getAggregation(), query.getOrder());
+                futures.add(findAndAggregateAsync(tenantId, entityId, subQuery, toPartitionTs(startTs), toPartitionTs(endTs)));
+                startPeriod = endTs;
+            }
+            ListenableFuture<List<Optional<TsKvEntryAggWrapper>>> future = Futures.allAsList(futures);
+            return Futures.transform(future, new Function<>() {
+                @Nullable
                 @Override
-                public void onFailure(Throwable t) {
-                    log.error("[{}][{}] Failed to fetch partitions for interval {}-{}", entityId.getEntityType().name(), entityId.getId(), minPartition, maxPartition, t);
+                public ReadTsKvQueryResult apply(@Nullable List<Optional<TsKvEntryAggWrapper>> input) {
+                    if (input == null) {
+                        return new ReadTsKvQueryResult(query.getId(), Collections.emptyList(), query.getStartTs());
+                    } else {
+                        long maxTs = query.getStartTs();
+                        List<TsKvEntry> data = new ArrayList<>();
+                        for (var opt : input) {
+                            if (opt.isPresent()) {
+                                TsKvEntryAggWrapper tsKvEntryAggWrapper = opt.get();
+                                maxTs = Math.max(maxTs, tsKvEntryAggWrapper.getLastEntryTs());
+                                data.add(tsKvEntryAggWrapper.getEntry());
+                            }
+                        }
+                        return new ReadTsKvQueryResult(query.getId(), data, maxTs);
+                    }
+
                 }
             }, readResultsProcessingExecutor);
-            return resultFuture;
         }
     }
 
     @Override
-    public ListenableFuture<List<TsKvEntry>> findAllAsync(TenantId tenantId, EntityId entityId, ReadTsKvQuery query) {
-        if (query.getAggregation() == Aggregation.NONE) {
-            return findAllAsyncWithLimit(tenantId, entityId, query);
-        } else {
-            long step = Math.max(query.getInterval(), MIN_AGGREGATION_STEP_MS);
-            long stepTs = query.getStartTs();
-            List<ListenableFuture<Optional<TsKvEntry>>> futures = new ArrayList<>();
-            while (stepTs < query.getEndTs()) {
-                long startTs = stepTs;
-                long endTs = stepTs + step;
-                ReadTsKvQuery subQuery = new BaseReadTsKvQuery(query.getKey(), startTs, endTs, step, 1, query.getAggregation(), query.getOrder());
-                futures.add(findAndAggregateAsync(tenantId, entityId, subQuery, toPartitionTs(startTs), toPartitionTs(endTs)));
-                stepTs = endTs;
-            }
-            ListenableFuture<List<Optional<TsKvEntry>>> future = Futures.allAsList(futures);
-            return Futures.transform(future, new Function<List<Optional<TsKvEntry>>, List<TsKvEntry>>() {
-                @Nullable
-                @Override
-                public List<TsKvEntry> apply(@Nullable List<Optional<TsKvEntry>> input) {
-                    return input == null ? Collections.emptyList() : input.stream().filter(v -> v.isPresent()).map(v -> v.get()).collect(Collectors.toList());
-                }
-            }, readResultsProcessingExecutor);
-        }
+    public void cleanup(long systemTtl) {
+        //Cleanup by TTL is native for Cassandra
     }
 
-    private ListenableFuture<List<TsKvEntry>> findAllAsyncWithLimit(TenantId tenantId, EntityId entityId, ReadTsKvQuery query) {
+    private ListenableFuture<ReadTsKvQueryResult> findAllAsyncWithLimit(TenantId tenantId, EntityId entityId, ReadTsKvQuery query) {
         long minPartition = toPartitionTs(query.getStartTs());
         long maxPartition = toPartitionTs(query.getEndTs());
         final ListenableFuture<List<Long>> partitionsListFuture = getPartitionsFuture(tenantId, query, entityId, minPartition, maxPartition);
         final SimpleListenableFuture<List<TsKvEntry>> resultFuture = new SimpleListenableFuture<>();
 
-        Futures.addCallback(partitionsListFuture, new FutureCallback<List<Long>>() {
+        Futures.addCallback(partitionsListFuture, new FutureCallback<>() {
             @Override
             public void onSuccess(@Nullable List<Long> partitions) {
                 TsKvQueryCursor cursor = new TsKvQueryCursor(entityId.getEntityType().name(), entityId.getId(), query, partitions);
@@ -307,10 +334,16 @@ public class CassandraBaseTimeseriesDao extends AbstractCassandraBaseTimeseriesD
             }
         }, readResultsProcessingExecutor);
 
-        return resultFuture;
+        return Futures.transform(resultFuture, tsKvEntries -> {
+            long lastTs = query.getStartTs();
+            if (tsKvEntries != null) {
+                lastTs = tsKvEntries.stream().map(TsKvEntry::getTs).max(Long::compare).orElse(query.getStartTs());
+            }
+            return new ReadTsKvQueryResult(query.getId(), tsKvEntries, lastTs);
+        }, MoreExecutors.directExecutor());
     }
 
-    private long toPartitionTs(long ts) {
+    long toPartitionTs(long ts) {
         LocalDateTime time = LocalDateTime.ofInstant(Instant.ofEpochMilli(ts), ZoneOffset.UTC);
         return tsFormat.truncatedTo(time).toInstant(ZoneOffset.UTC).toEpochMilli();
     }
@@ -365,7 +398,7 @@ public class CassandraBaseTimeseriesDao extends AbstractCassandraBaseTimeseriesD
         }
     }
 
-    private ListenableFuture<Optional<TsKvEntry>> findAndAggregateAsync(TenantId tenantId, EntityId entityId, ReadTsKvQuery query, long minPartition, long maxPartition) {
+    private ListenableFuture<Optional<TsKvEntryAggWrapper>> findAndAggregateAsync(TenantId tenantId, EntityId entityId, ReadTsKvQuery query, long minPartition, long maxPartition) {
         final Aggregation aggregation = query.getAggregation();
         final String key = query.getKey();
         final long startTs = query.getStartTs();
@@ -386,12 +419,58 @@ public class CassandraBaseTimeseriesDao extends AbstractCassandraBaseTimeseriesD
                         readResultsProcessingExecutor);
     }
 
-    private ListenableFuture<List<Long>> getPartitionsFuture(TenantId tenantId, ReadTsKvQuery query, EntityId entityId, long minPartition, long maxPartition) {
+    ListenableFuture<List<Long>> getPartitionsFuture(TenantId tenantId, TsKvQuery query, EntityId entityId, long minPartition, long maxPartition) {
         if (isFixedPartitioning()) { //no need to fetch partitions from DB
             return Futures.immediateFuture(FIXED_PARTITION);
         }
+        if (!isUseTsKeyValuePartitioningOnRead()) {
+            final long estimatedPartitionCount = estimatePartitionCount(minPartition, maxPartition);
+            if  (estimatedPartitionCount <= useTsKeyValuePartitioningOnReadMaxEstimatedPartitionCount) {
+                return Futures.immediateFuture(calculatePartitions(minPartition, maxPartition, (int) estimatedPartitionCount));
+            }
+        }
+        return getPartitionsFromDB(tenantId, query, entityId, minPartition, maxPartition);
+    }
+
+    ListenableFuture<List<Long>> getPartitionsFromDB(TenantId tenantId, TsKvQuery query, EntityId entityId, long minPartition, long maxPartition) {
         TbResultSetFuture partitionsFuture = fetchPartitions(tenantId, entityId, query.getKey(), minPartition, maxPartition);
         return Futures.transformAsync(partitionsFuture, getPartitionsArrayFunction(), readResultsProcessingExecutor);
+    }
+
+    // Optimistic estimation of partition count, expected to be never called for infinite partitioning
+    long estimatePartitionCount(long minPartition, long maxPartition) {
+        if (maxPartition > minPartition) {
+            return (maxPartition - minPartition) / tsFormat.getDurationMs() + 2; //at least 2 partitions, at max 2 partitions overestimated
+        }
+        return 1; // 1 or 0, but 1 is more optimistic
+    }
+
+    List<Long> calculatePartitions(long minPartition, long maxPartition) {
+       return calculatePartitions(minPartition, maxPartition, 0);
+    }
+
+    List<Long> calculatePartitions(long minPartition, long maxPartition, int estimatedPartitionCount) {
+        if (minPartition == maxPartition) {
+            return Collections.singletonList(minPartition);
+        }
+        List<Long> partitions = estimatedPartitionCount > 0 ? new ArrayList<>(estimatedPartitionCount) : new ArrayList<>();
+
+        long currentPartition = minPartition;
+        LocalDateTime currentPartitionTime = LocalDateTime.ofInstant(Instant.ofEpochMilli(currentPartition), ZoneOffset.UTC);
+
+        while (maxPartition > currentPartition) {
+            partitions.add(currentPartition);
+            currentPartitionTime = calculateNextPartition(currentPartitionTime);
+            currentPartition = currentPartitionTime.toInstant(ZoneOffset.UTC).toEpochMilli();
+        }
+
+        partitions.add(maxPartition);
+
+        return partitions;
+    }
+
+    private LocalDateTime calculateNextPartition(LocalDateTime time) {
+        return time.plus(1, tsFormat.getTruncateUnit());
     }
 
     private AsyncFunction<List<Long>, List<TbResultSet>> getFetchChunksAsyncFunction(TenantId tenantId, EntityId entityId, String key, Aggregation aggregation, long startTs, long endTs) {
@@ -422,56 +501,6 @@ public class CassandraBaseTimeseriesDao extends AbstractCassandraBaseTimeseriesD
 
     private boolean isFixedPartitioning() {
         return tsFormat.getTruncateUnit().equals(ChronoUnit.FOREVER);
-    }
-
-    private void processSetNullValues(TenantId tenantId, EntityId entityId, TsKvEntry tsKvEntry, long ttl, List<ListenableFuture<Void>> futures, long partition, DataType type) {
-        switch (type) {
-            case LONG:
-                futures.add(saveNull(tenantId, entityId, tsKvEntry, ttl, partition, DataType.BOOLEAN));
-                futures.add(saveNull(tenantId, entityId, tsKvEntry, ttl, partition, DataType.DOUBLE));
-                futures.add(saveNull(tenantId, entityId, tsKvEntry, ttl, partition, DataType.STRING));
-                futures.add(saveNull(tenantId, entityId, tsKvEntry, ttl, partition, DataType.JSON));
-                break;
-            case BOOLEAN:
-                futures.add(saveNull(tenantId, entityId, tsKvEntry, ttl, partition, DataType.DOUBLE));
-                futures.add(saveNull(tenantId, entityId, tsKvEntry, ttl, partition, DataType.LONG));
-                futures.add(saveNull(tenantId, entityId, tsKvEntry, ttl, partition, DataType.STRING));
-                futures.add(saveNull(tenantId, entityId, tsKvEntry, ttl, partition, DataType.JSON));
-                break;
-            case DOUBLE:
-                futures.add(saveNull(tenantId, entityId, tsKvEntry, ttl, partition, DataType.BOOLEAN));
-                futures.add(saveNull(tenantId, entityId, tsKvEntry, ttl, partition, DataType.LONG));
-                futures.add(saveNull(tenantId, entityId, tsKvEntry, ttl, partition, DataType.STRING));
-                futures.add(saveNull(tenantId, entityId, tsKvEntry, ttl, partition, DataType.JSON));
-                break;
-            case STRING:
-                futures.add(saveNull(tenantId, entityId, tsKvEntry, ttl, partition, DataType.BOOLEAN));
-                futures.add(saveNull(tenantId, entityId, tsKvEntry, ttl, partition, DataType.DOUBLE));
-                futures.add(saveNull(tenantId, entityId, tsKvEntry, ttl, partition, DataType.LONG));
-                futures.add(saveNull(tenantId, entityId, tsKvEntry, ttl, partition, DataType.JSON));
-                break;
-            case JSON:
-                futures.add(saveNull(tenantId, entityId, tsKvEntry, ttl, partition, DataType.BOOLEAN));
-                futures.add(saveNull(tenantId, entityId, tsKvEntry, ttl, partition, DataType.DOUBLE));
-                futures.add(saveNull(tenantId, entityId, tsKvEntry, ttl, partition, DataType.LONG));
-                futures.add(saveNull(tenantId, entityId, tsKvEntry, ttl, partition, DataType.STRING));
-                break;
-        }
-    }
-
-    private ListenableFuture<Void> saveNull(TenantId tenantId, EntityId entityId, TsKvEntry tsKvEntry, long ttl, long partition, DataType type) {
-        BoundStatementBuilder stmtBuilder = new BoundStatementBuilder((ttl == 0 ? getSaveStmt(type) : getSaveTtlStmt(type)).bind());
-        stmtBuilder.setString(0, entityId.getEntityType().name())
-                .setUuid(1, entityId.getId())
-                .setString(2, tsKvEntry.getKey())
-                .setLong(3, partition)
-                .setLong(4, tsKvEntry.getTs());
-        stmtBuilder.setToNull(getColumnName(type));
-        if (ttl > 0) {
-            stmtBuilder.setInt(6, (int) ttl);
-        }
-        BoundStatement stmt = stmtBuilder.build();
-        return getFuture(executeAsyncWrite(tenantId, stmt), rs -> null);
     }
 
     private ListenableFuture<Integer> doSavePartition(TenantId tenantId, EntityId entityId, String key, long ttl, long partition) {
@@ -566,49 +595,32 @@ public class CassandraBaseTimeseriesDao extends AbstractCassandraBaseTimeseriesD
         return deleteStmt;
     }
 
-    private void deletePartitionAsync(TenantId tenantId, final QueryCursor cursor, final SimpleListenableFuture<Void> resultFuture) {
-        if (!cursor.hasNextPartition()) {
-            resultFuture.set(null);
-        } else {
-            PreparedStatement proto = getDeletePartitionStmt();
-            BoundStatementBuilder stmtBuilder = new BoundStatementBuilder(proto.bind());
-            stmtBuilder.setString(0, cursor.getEntityType());
-            stmtBuilder.setUuid(1, cursor.getEntityId());
-            stmtBuilder.setLong(2, cursor.getNextPartition());
-            stmtBuilder.setString(3, cursor.getKey());
-
-            BoundStatement stmt = stmtBuilder.build();
-
-            Futures.addCallback(executeAsyncWrite(tenantId, stmt), new FutureCallback<AsyncResultSet>() {
-                @Override
-                public void onSuccess(@Nullable AsyncResultSet result) {
-                    deletePartitionAsync(tenantId, cursor, resultFuture);
-                }
-
-                @Override
-                public void onFailure(Throwable t) {
-                    log.error("[{}][{}] Failed to delete data for query {}-{}", stmt, t);
-                }
-            }, readResultsProcessingExecutor);
-        }
-    }
-
-    private PreparedStatement getDeletePartitionStmt() {
-        if (deletePartitionStmt == null) {
+    private PreparedStatement getSaveWithNullStmt() {
+        if (saveWithNullStmt == null) {
             stmtCreationLock.lock();
             try {
-                if (deletePartitionStmt == null) {
-                    deletePartitionStmt = prepare("DELETE FROM " + ModelConstants.TS_KV_PARTITIONS_CF +
-                            " WHERE " + ModelConstants.ENTITY_TYPE_COLUMN + EQUALS_PARAM
-                            + "AND " + ModelConstants.ENTITY_ID_COLUMN + EQUALS_PARAM
-                            + "AND " + ModelConstants.PARTITION_COLUMN + EQUALS_PARAM
-                            + "AND " + ModelConstants.KEY_COLUMN + EQUALS_PARAM);
+                if (saveWithNullStmt == null) {
+                    saveWithNullStmt = prepare(INSERT_WITH_NULL);
                 }
             } finally {
                 stmtCreationLock.unlock();
             }
         }
-        return deletePartitionStmt;
+        return saveWithNullStmt;
+    }
+
+    private PreparedStatement getSaveWithNullWithTtlStmt() {
+        if (saveWithNullWithTtlStmt == null) {
+            stmtCreationLock.lock();
+            try {
+                if (saveWithNullWithTtlStmt == null) {
+                    saveWithNullWithTtlStmt = prepare(INSERT_WITH_NULL + " USING TTL ?");
+                }
+            } finally {
+                stmtCreationLock.unlock();
+            }
+        }
+        return saveWithNullWithTtlStmt;
     }
 
     private PreparedStatement getSaveStmt(DataType dataType) {
@@ -616,17 +628,11 @@ public class CassandraBaseTimeseriesDao extends AbstractCassandraBaseTimeseriesD
             stmtCreationLock.lock();
             try {
                 if (saveStmts == null) {
-                    saveStmts = new PreparedStatement[DataType.values().length];
+                    var stmts = new PreparedStatement[DataType.values().length];
                     for (DataType type : DataType.values()) {
-                        saveStmts[type.ordinal()] = prepare(INSERT_INTO + ModelConstants.TS_KV_CF +
-                                "(" + ModelConstants.ENTITY_TYPE_COLUMN +
-                                "," + ModelConstants.ENTITY_ID_COLUMN +
-                                "," + ModelConstants.KEY_COLUMN +
-                                "," + ModelConstants.PARTITION_COLUMN +
-                                "," + ModelConstants.TS_COLUMN +
-                                "," + getColumnName(type) + ")" +
-                                " VALUES(?, ?, ?, ?, ?, ?)");
+                        stmts[type.ordinal()] = prepare(getPreparedStatementQuery(type));
                     }
+                    saveStmts = stmts;
                 }
             } finally {
                 stmtCreationLock.unlock();
@@ -640,23 +646,32 @@ public class CassandraBaseTimeseriesDao extends AbstractCassandraBaseTimeseriesD
             stmtCreationLock.lock();
             try {
                 if (saveTtlStmts == null) {
-                    saveTtlStmts = new PreparedStatement[DataType.values().length];
+                    var stmts = new PreparedStatement[DataType.values().length];
                     for (DataType type : DataType.values()) {
-                        saveTtlStmts[type.ordinal()] = prepare(INSERT_INTO + ModelConstants.TS_KV_CF +
-                                "(" + ModelConstants.ENTITY_TYPE_COLUMN +
-                                "," + ModelConstants.ENTITY_ID_COLUMN +
-                                "," + ModelConstants.KEY_COLUMN +
-                                "," + ModelConstants.PARTITION_COLUMN +
-                                "," + ModelConstants.TS_COLUMN +
-                                "," + getColumnName(type) + ")" +
-                                " VALUES(?, ?, ?, ?, ?, ?) USING TTL ?");
+                        stmts[type.ordinal()] = prepare(getPreparedStatementQueryWithTtl(type));
                     }
+                    saveTtlStmts = stmts;
                 }
             } finally {
                 stmtCreationLock.unlock();
             }
         }
         return saveTtlStmts[dataType.ordinal()];
+    }
+
+    private String getPreparedStatementQuery(DataType type) {
+        return INSERT_INTO + ModelConstants.TS_KV_CF +
+                "(" + ModelConstants.ENTITY_TYPE_COLUMN +
+                "," + ModelConstants.ENTITY_ID_COLUMN +
+                "," + ModelConstants.KEY_COLUMN +
+                "," + ModelConstants.PARTITION_COLUMN +
+                "," + ModelConstants.TS_COLUMN +
+                "," + getColumnName(type) + ")" +
+                " VALUES(?, ?, ?, ?, ?, ?)";
+    }
+
+    private String getPreparedStatementQueryWithTtl(DataType type) {
+        return getPreparedStatementQuery(type) + " USING TTL ?";
     }
 
     private PreparedStatement getPartitionInsertStmt() {

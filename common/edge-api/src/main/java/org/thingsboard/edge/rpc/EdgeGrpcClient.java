@@ -1,5 +1,5 @@
 /**
- * Copyright © 2016-2021 The Thingsboard Authors
+ * Copyright © 2016-2025 The Thingsboard Authors
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -15,32 +15,36 @@
  */
 package org.thingsboard.edge.rpc;
 
-import com.google.common.io.Resources;
+import io.grpc.HttpConnectProxiedSocketAddress;
 import io.grpc.ManagedChannel;
-import io.grpc.netty.GrpcSslContexts;
-import io.grpc.netty.NettyChannelBuilder;
+import io.grpc.netty.shaded.io.grpc.netty.GrpcSslContexts;
+import io.grpc.netty.shaded.io.grpc.netty.NettyChannelBuilder;
+import io.grpc.netty.shaded.io.netty.handler.ssl.SslContextBuilder;
 import io.grpc.stub.StreamObserver;
+import lombok.Getter;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Service;
 import org.thingsboard.edge.exception.EdgeConnectionException;
-import org.thingsboard.server.gen.edge.ConnectRequestMsg;
-import org.thingsboard.server.gen.edge.ConnectResponseCode;
-import org.thingsboard.server.gen.edge.ConnectResponseMsg;
-import org.thingsboard.server.gen.edge.DownlinkMsg;
-import org.thingsboard.server.gen.edge.DownlinkResponseMsg;
-import org.thingsboard.server.gen.edge.EdgeConfiguration;
-import org.thingsboard.server.gen.edge.EdgeRpcServiceGrpc;
-import org.thingsboard.server.gen.edge.RequestMsg;
-import org.thingsboard.server.gen.edge.RequestMsgType;
-import org.thingsboard.server.gen.edge.ResponseMsg;
-import org.thingsboard.server.gen.edge.UplinkMsg;
-import org.thingsboard.server.gen.edge.UplinkResponseMsg;
+import org.thingsboard.server.common.data.ResourceUtils;
+import org.thingsboard.server.common.data.StringUtils;
+import org.thingsboard.server.gen.edge.v1.ConnectRequestMsg;
+import org.thingsboard.server.gen.edge.v1.ConnectResponseCode;
+import org.thingsboard.server.gen.edge.v1.ConnectResponseMsg;
+import org.thingsboard.server.gen.edge.v1.DownlinkMsg;
+import org.thingsboard.server.gen.edge.v1.DownlinkResponseMsg;
+import org.thingsboard.server.gen.edge.v1.EdgeConfiguration;
+import org.thingsboard.server.gen.edge.v1.EdgeRpcServiceGrpc;
+import org.thingsboard.server.gen.edge.v1.EdgeVersion;
+import org.thingsboard.server.gen.edge.v1.RequestMsg;
+import org.thingsboard.server.gen.edge.v1.RequestMsgType;
+import org.thingsboard.server.gen.edge.v1.ResponseMsg;
+import org.thingsboard.server.gen.edge.v1.SyncRequestMsg;
+import org.thingsboard.server.gen.edge.v1.UplinkMsg;
+import org.thingsboard.server.gen.edge.v1.UplinkResponseMsg;
 
 import javax.net.ssl.SSLException;
-import java.io.File;
-import java.net.URISyntaxException;
-import java.util.concurrent.ExecutionException;
+import java.net.InetSocketAddress;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.locks.ReentrantLock;
 import java.util.function.Consumer;
@@ -55,12 +59,28 @@ public class EdgeGrpcClient implements EdgeRpcClient {
     private int rpcPort;
     @Value("${cloud.rpc.timeout}")
     private int timeoutSecs;
-    @Value("${cloud.rpc.keep_alive_time_sec}")
+    @Value("${cloud.rpc.keep_alive_time_sec:10}")
     private int keepAliveTimeSec;
+    @Value("${cloud.rpc.keep_alive_timeout_sec:5}")
+    private int keepAliveTimeoutSec;
     @Value("${cloud.rpc.ssl.enabled}")
     private boolean sslEnabled;
-    @Value("${cloud.rpc.ssl.cert}")
+    @Value("${cloud.rpc.ssl.cert:}")
     private String certResource;
+    @Value("${cloud.rpc.max_inbound_message_size:4194304}")
+    private int maxInboundMessageSize;
+    @Value("${cloud.rpc.proxy.enabled}")
+    private boolean proxyEnabled;
+    @Value("${cloud.rpc.proxy.host:}")
+    private String proxyHost;
+    @Value("${cloud.rpc.proxy.port:0}")
+    private int proxyPort;
+    @Value("${cloud.rpc.proxy.username:}")
+    private String proxyUsername;
+    @Value("${cloud.rpc.proxy.password:}")
+    private String proxyPassword;
+    @Getter
+    private int serverMaxInboundMessageSize;
 
     private ManagedChannel channel;
 
@@ -76,24 +96,49 @@ public class EdgeGrpcClient implements EdgeRpcClient {
                         Consumer<DownlinkMsg> onDownlink,
                         Consumer<Exception> onError) {
         NettyChannelBuilder builder = NettyChannelBuilder.forAddress(rpcHost, rpcPort)
-                .keepAliveTime(keepAliveTimeSec, TimeUnit.SECONDS);
+                .maxInboundMessageSize(maxInboundMessageSize)
+                .keepAliveTime(keepAliveTimeSec, TimeUnit.SECONDS)
+                .keepAliveTimeout(keepAliveTimeoutSec, TimeUnit.SECONDS)
+                .keepAliveWithoutCalls(true);
+
         if (sslEnabled) {
             try {
-                builder.sslContext(GrpcSslContexts.forClient().trustManager(new File(Resources.getResource(certResource).toURI())).build());
-            } catch (URISyntaxException | SSLException e) {
+                SslContextBuilder sslContextBuilder = GrpcSslContexts.forClient();
+                if (StringUtils.isNotEmpty(certResource)) {
+                    sslContextBuilder.trustManager(ResourceUtils.getInputStream(this, certResource));
+                }
+                builder.sslContext(sslContextBuilder.build());
+            } catch (SSLException e) {
                 log.error("Failed to initialize channel!", e);
                 throw new RuntimeException(e);
             }
         } else {
             builder.usePlaintext();
         }
+
+        if (proxyEnabled && StringUtils.isNotEmpty(proxyHost) && proxyPort > 0) {
+            InetSocketAddress proxyAddress = new InetSocketAddress(proxyHost, proxyPort);
+            InetSocketAddress targetAddress = new InetSocketAddress(rpcHost, rpcPort);
+            builder.proxyDetector(socketAddress -> HttpConnectProxiedSocketAddress.newBuilder()
+                    .setTargetAddress(targetAddress)
+                    .setProxyAddress(proxyAddress)
+                    .setUsername(proxyUsername)
+                    .setPassword(proxyPassword)
+                    .build());
+        }
+
         channel = builder.build();
         EdgeRpcServiceGrpc.EdgeRpcServiceStub stub = EdgeRpcServiceGrpc.newStub(channel);
         log.info("[{}] Sending a connect request to the TB!", edgeKey);
-        this.inputStream = stub.handleMsgs(initOutputStream(edgeKey, onUplinkResponse, onEdgeUpdate, onDownlink, onError));
+        this.inputStream = stub.withCompression("gzip").handleMsgs(initOutputStream(edgeKey, onUplinkResponse, onEdgeUpdate, onDownlink, onError));
         this.inputStream.onNext(RequestMsg.newBuilder()
                 .setMsgType(RequestMsgType.CONNECT_RPC_MESSAGE)
-                .setConnectRequestMsg(ConnectRequestMsg.newBuilder().setEdgeRoutingKey(edgeKey).setEdgeSecret(edgeSecret).build())
+                .setConnectRequestMsg(ConnectRequestMsg.newBuilder()
+                        .setEdgeRoutingKey(edgeKey)
+                        .setEdgeSecret(edgeSecret)
+                        .setEdgeVersion(EdgeVersion.V_4_3_0)
+                        .setMaxInboundMessageSize(maxInboundMessageSize)
+                        .build())
                 .build());
     }
 
@@ -102,12 +147,16 @@ public class EdgeGrpcClient implements EdgeRpcClient {
                                                          Consumer<EdgeConfiguration> onEdgeUpdate,
                                                          Consumer<DownlinkMsg> onDownlink,
                                                          Consumer<Exception> onError) {
-        return new StreamObserver<ResponseMsg>() {
+        return new StreamObserver<>() {
             @Override
             public void onNext(ResponseMsg responseMsg) {
                 if (responseMsg.hasConnectResponseMsg()) {
                     ConnectResponseMsg connectResponseMsg = responseMsg.getConnectResponseMsg();
                     if (connectResponseMsg.getResponseCode().equals(ConnectResponseCode.ACCEPTED)) {
+                        if (connectResponseMsg.hasMaxInboundMessageSize()) {
+                            log.debug("[{}] Server max inbound message size: {}", edgeKey, connectResponseMsg.getMaxInboundMessageSize());
+                            serverMaxInboundMessageSize = connectResponseMsg.getMaxInboundMessageSize();
+                        }
                         log.info("[{}] Configuration received: {}", edgeKey, connectResponseMsg.getConfiguration());
                         onEdgeUpdate.accept(connectResponseMsg.getConfiguration());
                     } else {
@@ -133,7 +182,7 @@ public class EdgeGrpcClient implements EdgeRpcClient {
 
             @Override
             public void onError(Throwable t) {
-                log.debug("[{}] The rpc session received an error!", edgeKey, t);
+                log.warn("[{}] Stream was terminated due to error:", edgeKey, t);
                 try {
                     EdgeGrpcClient.this.disconnect(true);
                 } catch (InterruptedException e) {
@@ -144,7 +193,7 @@ public class EdgeGrpcClient implements EdgeRpcClient {
 
             @Override
             public void onCompleted() {
-                log.debug("[{}] The rpc session was closed!", edgeKey);
+                log.info("[{}] Stream was closed and completed successfully!", edgeKey);
             }
         };
     }
@@ -153,7 +202,9 @@ public class EdgeGrpcClient implements EdgeRpcClient {
     public void disconnect(boolean onError) throws InterruptedException {
         if (!onError) {
             try {
-                inputStream.onCompleted();
+                if (inputStream != null) {
+                    inputStream.onCompleted();
+                }
             } catch (Exception e) {
                 log.error("Exception during onCompleted", e);
             }
@@ -183,8 +234,8 @@ public class EdgeGrpcClient implements EdgeRpcClient {
 
     @Override
     public void sendUplinkMsg(UplinkMsg msg) {
+        uplinkMsgLock.lock();
         try {
-            uplinkMsgLock.lock();
             this.inputStream.onNext(RequestMsg.newBuilder()
                     .setMsgType(RequestMsgType.UPLINK_RPC_MESSAGE)
                     .setUplinkMsg(msg)
@@ -195,11 +246,15 @@ public class EdgeGrpcClient implements EdgeRpcClient {
     }
 
     @Override
-    public void sendSyncRequestMsg() {
+    public void sendSyncRequestMsg(boolean fullSyncRequired) {
+        uplinkMsgLock.lock();
         try {
-            uplinkMsgLock.lock();
+            SyncRequestMsg syncRequestMsg = SyncRequestMsg.newBuilder()
+                    .setFullSync(fullSyncRequired)
+                    .build();
             this.inputStream.onNext(RequestMsg.newBuilder()
                     .setMsgType(RequestMsgType.SYNC_REQUEST_RPC_MESSAGE)
+                    .setSyncRequestMsg(syncRequestMsg)
                     .build());
         } finally {
             uplinkMsgLock.unlock();
@@ -208,8 +263,8 @@ public class EdgeGrpcClient implements EdgeRpcClient {
 
     @Override
     public void sendDownlinkResponseMsg(DownlinkResponseMsg downlinkResponseMsg) {
+        uplinkMsgLock.lock();
         try {
-            uplinkMsgLock.lock();
             this.inputStream.onNext(RequestMsg.newBuilder()
                     .setMsgType(RequestMsgType.UPLINK_RPC_MESSAGE)
                     .setDownlinkResponseMsg(downlinkResponseMsg)
@@ -218,4 +273,5 @@ public class EdgeGrpcClient implements EdgeRpcClient {
             uplinkMsgLock.unlock();
         }
     }
+
 }

@@ -1,5 +1,5 @@
 /**
- * Copyright © 2016-2021 The Thingsboard Authors
+ * Copyright © 2016-2025 The Thingsboard Authors
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -19,19 +19,21 @@ import org.springframework.stereotype.Component;
 import org.thingsboard.server.common.data.DashboardInfo;
 import org.thingsboard.server.common.data.HasCustomerId;
 import org.thingsboard.server.common.data.HasTenantId;
+import org.thingsboard.server.common.data.TbResourceInfo;
 import org.thingsboard.server.common.data.User;
 import org.thingsboard.server.common.data.id.DashboardId;
 import org.thingsboard.server.common.data.id.EntityId;
+import org.thingsboard.server.common.data.id.TbResourceId;
 import org.thingsboard.server.common.data.id.UserId;
 import org.thingsboard.server.common.data.security.Authority;
 import org.thingsboard.server.service.security.model.SecurityUser;
 
-@Component(value = "customerUserPermissions")
+@Component
 public class CustomerUserPermissions extends AbstractPermissions {
 
     public CustomerUserPermissions() {
         super();
-        put(Resource.ALARM, TenantAdminPermissions.tenantEntityPermissionChecker);
+        put(Resource.ALARM, customerAlarmPermissionChecker);
         put(Resource.ASSET, customerEntityPermissionChecker);
         put(Resource.DEVICE, customerEntityPermissionChecker);
         put(Resource.CUSTOMER, customerPermissionChecker);
@@ -41,7 +43,25 @@ public class CustomerUserPermissions extends AbstractPermissions {
         put(Resource.WIDGETS_BUNDLE, widgetsPermissionChecker);
         put(Resource.WIDGET_TYPE, widgetsPermissionChecker);
         put(Resource.EDGE, customerEntityPermissionChecker);
+        put(Resource.RPC, rpcPermissionChecker);
+        put(Resource.DEVICE_PROFILE, profilePermissionChecker);
+        put(Resource.ASSET_PROFILE, profilePermissionChecker);
+        put(Resource.TB_RESOURCE, customerResourcePermissionChecker);
+        put(Resource.MOBILE_APP_SETTINGS, new PermissionChecker.GenericPermissionChecker(Operation.READ));
     }
+
+    private static final PermissionChecker customerAlarmPermissionChecker = new PermissionChecker() {
+        @Override
+        public boolean hasPermission(SecurityUser user, Operation operation, EntityId entityId, HasTenantId entity) {
+            if (!user.getTenantId().equals(entity.getTenantId())) {
+                return false;
+            }
+            if (!(entity instanceof HasCustomerId)) {
+                return false;
+            }
+            return user.getCustomerId().equals(((HasCustomerId) entity).getCustomerId());
+        }
+    };
 
     private static final PermissionChecker customerEntityPermissionChecker =
             new PermissionChecker.GenericPermissionChecker(Operation.READ, Operation.READ_CREDENTIALS,
@@ -61,10 +81,7 @@ public class CustomerUserPermissions extends AbstractPermissions {
                     if (!(entity instanceof HasCustomerId)) {
                         return false;
                     }
-                    if (!operation.equals(Operation.CLAIM_DEVICES) && !user.getCustomerId().equals(((HasCustomerId) entity).getCustomerId())) {
-                        return false;
-                    }
-                    return true;
+                    return operation.equals(Operation.CLAIM_DEVICES) || user.getCustomerId().equals(((HasCustomerId) entity).getCustomerId());
                 }
             };
 
@@ -77,10 +94,27 @@ public class CustomerUserPermissions extends AbstractPermissions {
                     if (!super.hasPermission(user, operation, entityId, entity)) {
                         return false;
                     }
-                    if (!user.getCustomerId().equals(entityId)) {
+                    return user.getCustomerId().equals(entityId);
+                }
+
+            };
+
+    private static final PermissionChecker customerResourcePermissionChecker =
+            new PermissionChecker<TbResourceId, TbResourceInfo>() {
+
+                @Override
+                @SuppressWarnings("unchecked")
+                public boolean hasPermission(SecurityUser user, Operation operation, TbResourceId resourceId, TbResourceInfo resource) {
+                    if (operation != Operation.READ) {
                         return false;
                     }
-                    return true;
+                    if (resource.getResourceType() == null || !resource.getResourceType().isCustomerAccess()) {
+                        return false;
+                    }
+                    if (resource.getTenantId() == null || resource.getTenantId().isNullUid()) {
+                        return true;
+                    }
+                    return user.getTenantId().equals(resource.getTenantId());
                 }
 
             };
@@ -97,10 +131,7 @@ public class CustomerUserPermissions extends AbstractPermissions {
                     if (!user.getTenantId().equals(dashboard.getTenantId())) {
                         return false;
                     }
-                    if (!dashboard.isAssignedToCustomer(user.getCustomerId())) {
-                        return false;
-                    }
-                    return true;
+                    return dashboard.isAssignedToCustomer(user.getCustomerId());
                 }
 
             };
@@ -112,10 +143,16 @@ public class CustomerUserPermissions extends AbstractPermissions {
             if (!Authority.CUSTOMER_USER.equals(userEntity.getAuthority())) {
                 return false;
             }
-            if (!user.getId().equals(userId)) {
+
+            if (!user.getCustomerId().equals(userEntity.getCustomerId())) {
                 return false;
             }
-            return true;
+
+            if (Operation.READ.equals(operation)) {
+                return true;
+            }
+
+            return user.getId().equals(userId);
         }
 
     };
@@ -131,11 +168,38 @@ public class CustomerUserPermissions extends AbstractPermissions {
             if (entity.getTenantId() == null || entity.getTenantId().isNullUid()) {
                 return true;
             }
-            if (!user.getTenantId().equals(entity.getTenantId())) {
-                return false;
-            }
-            return true;
+            return user.getTenantId().equals(entity.getTenantId());
         }
 
+    };
+
+    private static final PermissionChecker rpcPermissionChecker = new PermissionChecker.GenericPermissionChecker(Operation.READ) {
+
+        @Override
+        @SuppressWarnings("unchecked")
+        public boolean hasPermission(SecurityUser user, Operation operation, EntityId entityId, HasTenantId entity) {
+            if (!super.hasPermission(user, operation, entityId, entity)) {
+                return false;
+            }
+            if (entity.getTenantId() == null || entity.getTenantId().isNullUid()) {
+                return true;
+            }
+            return user.getTenantId().equals(entity.getTenantId());
+        }
+    };
+
+    private static final PermissionChecker profilePermissionChecker = new PermissionChecker.GenericPermissionChecker(Operation.READ) {
+
+        @Override
+        @SuppressWarnings("unchecked")
+        public boolean hasPermission(SecurityUser user, Operation operation, EntityId entityId, HasTenantId entity) {
+            if (!super.hasPermission(user, operation, entityId, entity)) {
+                return false;
+            }
+            if (entity.getTenantId() == null || entity.getTenantId().isNullUid()) {
+                return true;
+            }
+            return user.getTenantId().equals(entity.getTenantId());
+        }
     };
 }

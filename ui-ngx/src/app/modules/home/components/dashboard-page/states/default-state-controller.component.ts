@@ -1,5 +1,5 @@
 ///
-/// Copyright © 2016-2021 The Thingsboard Authors
+/// Copyright © 2016-2025 The Thingsboard Authors
 ///
 /// Licensed under the Apache License, Version 2.0 (the "License");
 /// you may not use this file except in compliance with the License.
@@ -23,7 +23,7 @@ import { StateControllerComponent } from './state-controller.component';
 import { StatesControllerService } from '@home/components/dashboard-page/states/states-controller.service';
 import { EntityId } from '@app/shared/models/id/entity-id';
 import { UtilsService } from '@core/services/utils.service';
-import { base64toObj, objToBase64URI } from '@app/core/utils';
+import { base64toObj, objToBase64 } from '@app/core/utils';
 import { DashboardUtilsService } from '@core/services/dashboard-utils.service';
 import { EntityService } from '@core/http/entity.service';
 import { MobileService } from '@core/services/mobile.service';
@@ -54,7 +54,7 @@ export class DefaultStateControllerComponent extends StateControllerComponent im
     super.ngOnDestroy();
   }
 
-  protected init() {
+  public init() {
     if (this.preservedState) {
       this.stateObject = this.preservedState;
       setTimeout(() => {
@@ -168,10 +168,15 @@ export class DefaultStateControllerComponent extends StateControllerComponent im
     }
   }
 
-  public navigatePrevState(index: number): void {
-    if (index < this.stateObject.length - 1) {
-      this.stateObject.splice(index + 1, this.stateObject.length - index - 1);
-      this.gotoState(this.stateObject[this.stateObject.length - 1].id, true);
+  public navigatePrevState(index: number, params?: StateParams): void {
+    const lastStateIndex = this.stateObject.length - 1;
+    if (index < lastStateIndex) {
+      this.stateObject.splice(index + 1, lastStateIndex - index);
+      const selectedStateIndex = this.stateObject.length - 1;
+      if (params) {
+        this.stateObject[selectedStateIndex].params = params;
+      }
+      this.gotoState(this.stateObject[selectedStateIndex].id, true);
     }
   }
 
@@ -182,7 +187,8 @@ export class DefaultStateControllerComponent extends StateControllerComponent im
   }
 
   public getStateName(id: string, state: DashboardState): string {
-    return this.utils.customTranslation(state.name, id);
+    const name = this.utils.customTranslation(state.name, id);
+    return name === this.stateControllerId() ? name.charAt(0).toUpperCase() + name.slice(1) : name;
   }
 
   public getCurrentStateName(): string {
@@ -235,7 +241,8 @@ export class DefaultStateControllerComponent extends StateControllerComponent im
   private gotoState(stateId: string, update: boolean, openRightLayout?: boolean) {
     if (this.dashboardCtrl.dashboardCtx.state !== stateId) {
       this.dashboardCtrl.openDashboardState(stateId, openRightLayout);
-      if (stateId && this.statesValue[stateId]) {
+      this.stateIdSubject.next(stateId);
+      if (this.syncStateWithQueryParam && stateId && this.statesValue[stateId]) {
         this.mobileService.handleDashboardStateName(this.getStateName(stateId, this.statesValue[stateId]));
       }
       if (update) {
@@ -246,7 +253,7 @@ export class DefaultStateControllerComponent extends StateControllerComponent im
 
   private updateLocation() {
     if (this.stateObject[0].id) {
-      const newState = objToBase64URI(this.stateObject);
+      const newState = objToBase64(this.stateObject);
       this.updateStateParam(newState);
     }
   }

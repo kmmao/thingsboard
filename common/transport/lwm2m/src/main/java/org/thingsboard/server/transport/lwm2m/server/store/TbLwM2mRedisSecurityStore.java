@@ -1,5 +1,5 @@
 /**
- * Copyright © 2016-2021 The Thingsboard Authors
+ * Copyright © 2016-2025 The Thingsboard Authors
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -15,140 +15,202 @@
  */
 package org.thingsboard.server.transport.lwm2m.server.store;
 
-import org.eclipse.leshan.server.redis.serialization.SecurityInfoSerDes;
-import org.eclipse.leshan.server.security.EditableSecurityStore;
+import com.fasterxml.jackson.databind.JsonNode;
+import lombok.extern.slf4j.Slf4j;
+import org.eclipse.leshan.core.SecurityMode;
+import org.eclipse.leshan.core.peer.OscoreIdentity;
 import org.eclipse.leshan.server.security.NonUniqueSecurityInfoException;
 import org.eclipse.leshan.server.security.SecurityInfo;
-import org.eclipse.leshan.server.security.SecurityStoreListener;
-import org.springframework.data.redis.connection.RedisClusterConnection;
+import org.springframework.data.redis.connection.RedisConnection;
 import org.springframework.data.redis.connection.RedisConnectionFactory;
-import org.springframework.data.redis.core.Cursor;
-import org.springframework.data.redis.core.ScanOptions;
+import org.springframework.integration.redis.util.RedisLockRegistry;
+import org.thingsboard.common.util.JacksonUtil;
+import org.thingsboard.server.common.data.JavaSerDesUtil;
+import org.thingsboard.server.transport.lwm2m.secure.TbLwM2MSecurityInfo;
 
-import java.util.ArrayList;
-import java.util.Collection;
-import java.util.LinkedList;
-import java.util.List;
+import java.util.concurrent.locks.Lock;
 
-public class TbLwM2mRedisSecurityStore implements EditableSecurityStore {
+import static org.thingsboard.server.transport.lwm2m.server.store.TbLwM2mRedisRegistrationStore.REG_EP;
+
+@Slf4j
+public class TbLwM2mRedisSecurityStore implements TbEditableSecurityStore {
     private static final String SEC_EP = "SEC#EP#";
-
+    private static final String LOCK_EP = "LOCK#EP#";
     private static final String PSKID_SEC = "PSKID#SEC";
 
     private final RedisConnectionFactory connectionFactory;
-    private SecurityStoreListener listener;
+    private final RedisLockRegistry redisLock;
 
     public TbLwM2mRedisSecurityStore(RedisConnectionFactory connectionFactory) {
         this.connectionFactory = connectionFactory;
+        redisLock = new RedisLockRegistry(connectionFactory, "Security");
     }
 
     @Override
     public SecurityInfo getByEndpoint(String endpoint) {
+        Lock lock = null;
         try (var connection = connectionFactory.getConnection()) {
+            lock = redisLock.obtain(toLockKey(endpoint));
+            lock.lock();
             byte[] data = connection.get((SEC_EP + endpoint).getBytes());
-            if (data == null) {
+            if (data == null || data.length == 0) {
                 return null;
             } else {
-                return deserialize(data);
+                TbLwM2MSecurityInfo tbLwM2MSecurityInfo = JavaSerDesUtil.decode(data);
+                if (tbLwM2MSecurityInfo != null) {
+                    if (SecurityMode.NO_SEC.equals(tbLwM2MSecurityInfo.getSecurityMode())){
+
+                        // for tests: redis connect NoSec (securityInfo == null)
+                        log.info("lwm2m redis securityStore (decode -ok). Endpoint: [{}], secMode: [NoSec] key: [{}], data [{}]", endpoint, SEC_EP, data);
+
+                        return SecurityInfo.newPreSharedKeyInfo(SecurityMode.NO_SEC.toString(), SecurityMode.NO_SEC.toString(),
+                                SecurityMode.NO_SEC.toString().getBytes());
+                    } else {
+                        return tbLwM2MSecurityInfo.getSecurityInfo();
+                    }
+                } else if (SecurityMode.NO_SEC.equals(getSecurityModeByRegistration (connection,  endpoint))){
+
+                    // for tests: redis connect NoSec (securityInfo == null)
+                    log.info("lwm2m redis securityStore (decode - bad, registration - unsecure). Endpoint: [{}], secMode: [NoSec] key: [{}], data [{}]", endpoint, SEC_EP, data);
+
+                    return SecurityInfo.newPreSharedKeyInfo(SecurityMode.NO_SEC.toString(), SecurityMode.NO_SEC.toString(),
+                            SecurityMode.NO_SEC.toString().getBytes());
+                } else {
+
+                    // for tests: redis connect NoSec (securityInfo == null)
+                    log.info("lwm2m redis securityStore (decode - bad, registration is not unsecure) - return null. Endpoint: [{}], key: [{}], data [{}]", endpoint, SEC_EP, data);
+
+                    return null;
+                }
+            }
+        } finally {
+            if (lock != null) {
+                lock.unlock();
             }
         }
     }
 
     @Override
     public SecurityInfo getByIdentity(String identity) {
+        Lock lock = null;
         try (var connection = connectionFactory.getConnection()) {
+            lock = redisLock.obtain(toLockKey(identity));
+            lock.lock();
             byte[] ep = connection.hGet(PSKID_SEC.getBytes(), identity.getBytes());
             if (ep == null) {
                 return null;
             } else {
                 byte[] data = connection.get((SEC_EP + new String(ep)).getBytes());
-                if (data == null) {
+                if (data == null || data.length == 0) {
                     return null;
                 } else {
-                    return deserialize(data);
+                    return ((TbLwM2MSecurityInfo) JavaSerDesUtil.decode(data)).getSecurityInfo();
                 }
+            }
+        } finally {
+            if (lock != null) {
+                lock.unlock();
             }
         }
     }
 
     @Override
-    public Collection<SecurityInfo> getAll() {
-        try (var connection = connectionFactory.getConnection()) {
-            Collection<SecurityInfo> list = new LinkedList<>();
-            ScanOptions scanOptions = ScanOptions.scanOptions().count(100).match(SEC_EP + "*").build();
-            List<Cursor<byte[]>> scans = new ArrayList<>();
-            if (connection instanceof RedisClusterConnection) {
-                ((RedisClusterConnection) connection).clusterGetNodes().forEach(node -> {
-                    scans.add(((RedisClusterConnection) connection).scan(node, scanOptions));
-                });
-            } else {
-                scans.add(connection.scan(scanOptions));
-            }
-
-            scans.forEach(scan -> {
-                scan.forEachRemaining(key -> {
-                    byte[] element = connection.get(key);
-                    list.add(deserialize(element));
-                });
-            });
-            return list;
-        }
-    }
-
-    @Override
-    public SecurityInfo add(SecurityInfo info) throws NonUniqueSecurityInfoException {
-        byte[] data = serialize(info);
-        try (var connection = connectionFactory.getConnection()) {
-            if (info.getIdentity() != null) {
-                // populate the secondary index (security info by PSK id)
-                String oldEndpoint = new String(connection.hGet(PSKID_SEC.getBytes(), info.getIdentity().getBytes()));
-                if (!oldEndpoint.equals(info.getEndpoint())) {
-                    throw new NonUniqueSecurityInfoException("PSK Identity " + info.getIdentity() + " is already used");
-                }
-                connection.hSet(PSKID_SEC.getBytes(), info.getIdentity().getBytes(), info.getEndpoint().getBytes());
-            }
-
-            byte[] previousData = connection.getSet((SEC_EP + info.getEndpoint()).getBytes(), data);
-            SecurityInfo previous = previousData == null ? null : deserialize(previousData);
-            String previousIdentity = previous == null ? null : previous.getIdentity();
-            if (previousIdentity != null && !previousIdentity.equals(info.getIdentity())) {
-                connection.hDel(PSKID_SEC.getBytes(), previousIdentity.getBytes());
-            }
-
-            return previous;
-        }
-    }
-
-    @Override
-    public SecurityInfo remove(String endpoint, boolean infosAreCompromised) {
-        try (var connection = connectionFactory.getConnection()) {
-            byte[] data = connection.get((SEC_EP + endpoint).getBytes());
-
-            if (data != null) {
-                SecurityInfo info = deserialize(data);
-                if (info.getIdentity() != null) {
-                    connection.hDel(PSKID_SEC.getBytes(), info.getIdentity().getBytes());
-                }
-                connection.del((SEC_EP + endpoint).getBytes());
-                if (listener != null) {
-                    listener.securityInfoRemoved(infosAreCompromised, info);
-                }
-                return info;
-            }
-        }
+    public SecurityInfo getByOscoreIdentity(OscoreIdentity oscoreIdentity) {
         return null;
     }
 
-    private byte[] serialize(SecurityInfo secInfo) {
-        return SecurityInfoSerDes.serialize(secInfo);
-    }
+    @Override
+    public void put(TbLwM2MSecurityInfo tbSecurityInfo) throws NonUniqueSecurityInfoException {
+        SecurityInfo info = tbSecurityInfo.getSecurityInfo();
+        byte[] tbSecurityInfoSerialized = JavaSerDesUtil.encode(tbSecurityInfo);
+        Lock lock = null;
+        try (var connection = connectionFactory.getConnection()) {
+            lock = redisLock.obtain(tbSecurityInfo.getEndpoint());
+            lock.lock();
+            if (info != null && info.getPskIdentity() != null) {
+                byte[] oldEndpointBytes = connection.hGet(PSKID_SEC.getBytes(), info.getPskIdentity().getBytes());
+                if (oldEndpointBytes != null) {
+                    String oldEndpoint = new String(oldEndpointBytes);
+                    if (!oldEndpoint.equals(info.getEndpoint())) {
+                        throw new NonUniqueSecurityInfoException("PSK Identity " + info.getPskIdentity() + " is already used");
+                    }
+                    connection.hSet(PSKID_SEC.getBytes(), info.getPskIdentity().getBytes(), info.getEndpoint().getBytes());
+                }
+            }
 
-    private SecurityInfo deserialize(byte[] data) {
-        return SecurityInfoSerDes.deserialize(data);
+            byte[] previousData = connection.getSet((SEC_EP + tbSecurityInfo.getEndpoint()).getBytes(), tbSecurityInfoSerialized);
+
+                // for tests: redis connect NoSec (securityInfo == null)
+            log.info("lwm2m redis connect. Endpoint: [{}], secMode: [{}] key: [{}], tbSecurityInfoSerialized [{}]",
+                    tbSecurityInfo.getEndpoint(), tbSecurityInfo.getSecurityMode().name(), SEC_EP, tbSecurityInfoSerialized);
+
+            if (previousData != null && info != null) {
+                String previousIdentity = ((TbLwM2MSecurityInfo) JavaSerDesUtil.decode(previousData)).getSecurityInfo().getPskIdentity();
+                if (previousIdentity != null && !previousIdentity.equals(info.getPskIdentity())) {
+                    connection.hDel(PSKID_SEC.getBytes(), previousIdentity.getBytes());
+                }
+            }
+        } finally {
+            if (lock != null) {
+                lock.unlock();
+            }
+        }
     }
 
     @Override
-    public void setListener(SecurityStoreListener listener) {
-        this.listener = listener;
+    public TbLwM2MSecurityInfo getTbLwM2MSecurityInfoByEndpoint(String endpoint) {
+        Lock lock = null;
+        try (var connection = connectionFactory.getConnection()) {
+            lock = redisLock.obtain(endpoint);
+            lock.lock();
+            byte[] data = connection.get((SEC_EP + endpoint).getBytes());
+            if (data != null && data.length > 0) {
+                return JavaSerDesUtil.decode(data);
+            } else {
+                return null;
+            }
+        } finally {
+            if (lock != null) {
+                lock.unlock();
+            }
+        }
+    }
+
+    @Override
+    public void remove(String endpoint) {
+        Lock lock = null;
+        try (var connection = connectionFactory.getConnection()) {
+            lock = redisLock.obtain(endpoint);
+            lock.lock();
+            byte[] data = connection.get((SEC_EP + endpoint).getBytes());
+            if (data != null && data.length > 0) {
+                SecurityInfo info = ((TbLwM2MSecurityInfo) JavaSerDesUtil.decode(data)).getSecurityInfo();
+                if (info != null && info.getPskIdentity() != null) {
+                    connection.hDel(PSKID_SEC.getBytes(), info.getPskIdentity().getBytes());
+                }
+                connection.del((SEC_EP + endpoint).getBytes());
+            }
+        } finally {
+            if (lock != null) {
+                lock.unlock();
+            }
+        }
+    }
+
+    private String toLockKey(String endpoint) {
+        return LOCK_EP + endpoint;
+    }
+
+    private SecurityMode getSecurityModeByRegistration (RedisConnection connection, String endpoint) {
+        try {
+            byte[] data = connection.get((REG_EP + endpoint).getBytes());
+            JsonNode registrationNode = JacksonUtil.fromString(new String(data != null ? data : new byte[0]), JsonNode.class);
+            String typeModeStr = registrationNode.get("transportdata").get("identity").get("type").asText();
+            return "unsecure".equals(typeModeStr) ? SecurityMode.NO_SEC : null;
+        } catch (Exception e) {
+            log.error("Redis: Failed get SecurityMode by Registration, endpoint: [{}]", endpoint, e);
+            return null;
+        }
+
     }
 }

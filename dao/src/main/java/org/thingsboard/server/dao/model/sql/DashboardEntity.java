@@ -1,5 +1,5 @@
 /**
- * Copyright © 2016-2021 The Thingsboard Authors
+ * Copyright © 2016-2025 The Thingsboard Authors
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -15,29 +15,25 @@
  */
 package org.thingsboard.server.dao.model.sql;
 
-import com.fasterxml.jackson.core.JsonProcessingException;
 import com.fasterxml.jackson.databind.JavaType;
 import com.fasterxml.jackson.databind.JsonNode;
-import com.fasterxml.jackson.databind.ObjectMapper;
+import jakarta.persistence.Column;
+import jakarta.persistence.Convert;
+import jakarta.persistence.Entity;
+import jakarta.persistence.Table;
 import lombok.Data;
 import lombok.EqualsAndHashCode;
 import lombok.extern.slf4j.Slf4j;
-import org.hibernate.annotations.Type;
-import org.hibernate.annotations.TypeDef;
-import org.springframework.util.StringUtils;
+import org.thingsboard.common.util.JacksonUtil;
 import org.thingsboard.server.common.data.Dashboard;
 import org.thingsboard.server.common.data.ShortCustomerInfo;
+import org.thingsboard.server.common.data.StringUtils;
 import org.thingsboard.server.common.data.id.DashboardId;
 import org.thingsboard.server.common.data.id.TenantId;
-import org.thingsboard.server.dao.model.BaseSqlEntity;
+import org.thingsboard.server.dao.model.BaseVersionedEntity;
 import org.thingsboard.server.dao.model.ModelConstants;
-import org.thingsboard.server.dao.model.SearchTextEntity;
-import org.thingsboard.server.dao.util.mapping.JsonStringType;
+import org.thingsboard.server.dao.util.mapping.JsonConverter;
 
-import javax.persistence.Column;
-import javax.persistence.Entity;
-import javax.persistence.Table;
-import java.io.IOException;
 import java.util.HashSet;
 import java.util.UUID;
 
@@ -45,13 +41,11 @@ import java.util.UUID;
 @Slf4j
 @EqualsAndHashCode(callSuper = true)
 @Entity
-@TypeDef(name = "json", typeClass = JsonStringType.class)
-@Table(name = ModelConstants.DASHBOARD_COLUMN_FAMILY_NAME)
-public final class DashboardEntity extends BaseSqlEntity<Dashboard> implements SearchTextEntity<Dashboard> {
+@Table(name = ModelConstants.DASHBOARD_TABLE_NAME)
+public final class DashboardEntity extends BaseVersionedEntity<Dashboard> {
 
-    private static final ObjectMapper objectMapper = new ObjectMapper();
     private static final JavaType assignedCustomersType =
-            objectMapper.getTypeFactory().constructCollectionType(HashSet.class, ShortCustomerInfo.class);
+            JacksonUtil.constructCollectionType(HashSet.class, ShortCustomerInfo.class);
 
     @Column(name = ModelConstants.DASHBOARD_TENANT_ID_PROPERTY)
     private UUID tenantId;
@@ -62,25 +56,28 @@ public final class DashboardEntity extends BaseSqlEntity<Dashboard> implements S
     @Column(name = ModelConstants.DASHBOARD_IMAGE_PROPERTY)
     private String image;
 
-    @Column(name = ModelConstants.SEARCH_TEXT_PROPERTY)
-    private String searchText;
-
     @Column(name = ModelConstants.DASHBOARD_ASSIGNED_CUSTOMERS_PROPERTY)
     private String assignedCustomers;
 
-    @Type(type = "json")
+    @Column(name = ModelConstants.DASHBOARD_MOBILE_HIDE_PROPERTY)
+    private boolean mobileHide;
+
+    @Column(name = ModelConstants.DASHBOARD_MOBILE_ORDER_PROPERTY)
+    private Integer mobileOrder;
+
+    @Convert(converter = JsonConverter.class)
     @Column(name = ModelConstants.DASHBOARD_CONFIGURATION_PROPERTY)
     private JsonNode configuration;
+
+    @Column(name = ModelConstants.EXTERNAL_ID_PROPERTY)
+    private UUID externalId;
 
     public DashboardEntity() {
         super();
     }
 
     public DashboardEntity(Dashboard dashboard) {
-        if (dashboard.getId() != null) {
-            this.setUuid(dashboard.getId().getId());
-        }
-        this.setCreatedTime(dashboard.getCreatedTime());
+        super(dashboard);
         if (dashboard.getTenantId() != null) {
             this.tenantId = dashboard.getTenantId().getId();
         }
@@ -88,41 +85,43 @@ public final class DashboardEntity extends BaseSqlEntity<Dashboard> implements S
         this.image = dashboard.getImage();
         if (dashboard.getAssignedCustomers() != null) {
             try {
-                this.assignedCustomers = objectMapper.writeValueAsString(dashboard.getAssignedCustomers());
-            } catch (JsonProcessingException e) {
+                this.assignedCustomers = JacksonUtil.toString(dashboard.getAssignedCustomers());
+            } catch (IllegalArgumentException e) {
                 log.error("Unable to serialize assigned customers to string!", e);
             }
         }
+        this.mobileHide = dashboard.isMobileHide();
+        this.mobileOrder = dashboard.getMobileOrder();
         this.configuration = dashboard.getConfiguration();
-    }
-
-    @Override
-    public String getSearchTextSource() {
-        return title;
-    }
-
-    @Override
-    public void setSearchText(String searchText) {
-        this.searchText = searchText;
+        if (dashboard.getExternalId() != null) {
+            this.externalId = dashboard.getExternalId().getId();
+        }
     }
 
     @Override
     public Dashboard toData() {
         Dashboard dashboard = new Dashboard(new DashboardId(this.getUuid()));
         dashboard.setCreatedTime(this.getCreatedTime());
+        dashboard.setVersion(version);
         if (tenantId != null) {
-            dashboard.setTenantId(new TenantId(tenantId));
+            dashboard.setTenantId(TenantId.fromUUID(tenantId));
         }
         dashboard.setTitle(title);
         dashboard.setImage(image);
         if (!StringUtils.isEmpty(assignedCustomers)) {
             try {
-                dashboard.setAssignedCustomers(objectMapper.readValue(assignedCustomers, assignedCustomersType));
-            } catch (IOException e) {
+                dashboard.setAssignedCustomers(JacksonUtil.fromString(assignedCustomers, assignedCustomersType));
+            } catch (IllegalArgumentException e) {
                 log.warn("Unable to parse assigned customers!", e);
             }
         }
+        dashboard.setMobileHide(mobileHide);
+        dashboard.setMobileOrder(mobileOrder);
         dashboard.setConfiguration(configuration);
+        if (externalId != null) {
+            dashboard.setExternalId(new DashboardId(externalId));
+        }
         return dashboard;
     }
+
 }

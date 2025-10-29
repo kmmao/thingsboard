@@ -1,5 +1,5 @@
 /**
- * Copyright © 2016-2021 The Thingsboard Authors
+ * Copyright © 2016-2025 The Thingsboard Authors
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -18,8 +18,10 @@ package org.thingsboard.server.transport.lwm2m.secure;
 import lombok.Data;
 import org.thingsboard.server.common.transport.auth.ValidateDeviceCredentialsResponse;
 
+import java.io.Serializable;
+
 @Data
-public class TbX509DtlsSessionInfo {
+public class TbX509DtlsSessionInfo implements Serializable {
 
     private final String x509CommonName;
     private final ValidateDeviceCredentialsResponse credentials;

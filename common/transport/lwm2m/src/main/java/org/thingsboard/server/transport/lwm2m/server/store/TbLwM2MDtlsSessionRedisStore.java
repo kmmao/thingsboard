@@ -1,5 +1,5 @@
 /**
- * Copyright © 2016-2021 The Thingsboard Authors
+ * Copyright © 2016-2025 The Thingsboard Authors
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -15,15 +15,14 @@
  */
 package org.thingsboard.server.transport.lwm2m.server.store;
 
-import com.fasterxml.jackson.databind.JsonNode;
 import org.springframework.data.redis.connection.RedisConnectionFactory;
-import org.thingsboard.common.util.JacksonUtil;
+import org.thingsboard.server.common.data.JavaSerDesUtil;
 import org.thingsboard.server.transport.lwm2m.secure.TbX509DtlsSessionInfo;
 
 public class TbLwM2MDtlsSessionRedisStore implements TbLwM2MDtlsSessionStore {
 
     private static final String SESSION_EP = "SESSION#EP#";
-    RedisConnectionFactory connectionFactory;
+    private final RedisConnectionFactory connectionFactory;
 
     public TbLwM2MDtlsSessionRedisStore(RedisConnectionFactory redisConnectionFactory) {
         this.connectionFactory = redisConnectionFactory;
@@ -32,11 +31,11 @@ public class TbLwM2MDtlsSessionRedisStore implements TbLwM2MDtlsSessionStore {
     @Override
     public void put(String endpoint, TbX509DtlsSessionInfo msg) {
         try (var c = connectionFactory.getConnection()) {
-            var msgJson = JacksonUtil.convertValue(msg, JsonNode.class);
-            if (msgJson != null) {
-                c.set(getKey(endpoint), msgJson.toString().getBytes());
+            var serializedMsg = JavaSerDesUtil.encode(msg);
+            if (serializedMsg != null) {
+                c.set(getKey(endpoint), serializedMsg);
             } else {
-                throw new RuntimeException("Problem with serialization of message: " + msg.toString());
+                throw new RuntimeException("Problem with serialization of message: " + msg);
             }
         }
     }
@@ -46,7 +45,7 @@ public class TbLwM2MDtlsSessionRedisStore implements TbLwM2MDtlsSessionStore {
         try (var c = connectionFactory.getConnection()) {
             var data = c.get(getKey(endpoint));
             if (data != null) {
-                return JacksonUtil.fromString(new String(data), TbX509DtlsSessionInfo.class);
+                return JavaSerDesUtil.decode(data);
             } else {
                 return null;
             }

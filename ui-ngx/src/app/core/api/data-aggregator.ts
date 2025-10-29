@@ -1,5 +1,5 @@
 ///
-/// Copyright © 2016-2021 The Thingsboard Authors
+/// Copyright © 2016-2025 The Thingsboard Authors
 ///
 /// Licensed under the Apache License, Version 2.0 (the "License");
 /// you may not use this file except in compliance with the License.
@@ -14,38 +14,45 @@
 /// limitations under the License.
 ///
 
-import { SubscriptionData, SubscriptionDataHolder } from '@app/shared/models/telemetry/telemetry.models';
+import { AggKey, IndexedSubscriptionData, } from '@app/shared/models/telemetry/telemetry.models';
 import {
   AggregationType,
+  calculateAggIntervalWithSubscriptionTimeWindow,
   calculateIntervalComparisonEndTime,
   calculateIntervalEndTime,
   calculateIntervalStartEndTime,
   getCurrentTime,
   getTime,
+  IntervalMath,
   SubscriptionTimewindow
 } from '@shared/models/time/time.models';
 import { UtilsService } from '@core/services/utils.service';
-import { deepClone, isNumeric } from '@core/utils';
+import { deepClone, isDefinedAndNotNull, isNumber, isNumeric } from '@core/utils';
+import { DataEntry, DataSet, IndexedData } from '@shared/models/widget.models';
+import BTree from 'sorted-btree';
 import Timeout = NodeJS.Timeout;
 
-export declare type onAggregatedData = (data: SubscriptionData, detectChanges: boolean) => void;
+export declare type onAggregatedData = (data: IndexedData, detectChanges: boolean) => void;
 
 interface AggData {
   count: number;
   sum: number;
   aggValue: any;
+  ts: number;
+  interval: [number, number];
 }
 
 class AggDataMap {
-  rangeChanged = false;
-  private minTs = Number.MAX_SAFE_INTEGER;
-  private map = new Map<number, AggData>();
+  private map = new BTree<number, AggData>();
+  private reusePair: [number, AggData] = [undefined, undefined];
+
+  constructor(
+    private subsTw: SubscriptionTimewindow,
+    private endTs: number,
+    private aggType: AggregationType
+  ){};
 
   set(ts: number, data: AggData) {
-    if (ts < this.minTs) {
-      this.rangeChanged = true;
-      this.minTs = ts;
-    }
     this.map.set(ts, data);
   }
 
@@ -57,7 +64,38 @@ class AggDataMap {
     this.map.delete(ts);
   }
 
-  forEach(callback: (value: AggData, key: number, map: Map<number, AggData>) => void, thisArg?: any) {
+  findDataForTs(ts: number): AggData | undefined {
+    if (ts >= this.endTs) {
+      this.updateLastInterval(ts + 1);
+    }
+    const pair = this.map.getPairOrNextLower(ts, this.reusePair);
+    if (pair) {
+      const data = pair[1];
+      const interval = data.interval;
+      if (ts < interval[1]) {
+        return data;
+      }
+    }
+  }
+
+  calculateAggInterval(timestamp: number): [number, number] {
+    return calculateAggIntervalWithSubscriptionTimeWindow(this.subsTw, this.endTs, timestamp, this.aggType);
+  }
+
+  updateLastInterval(endTs: number) {
+    if (endTs > this.endTs) {
+      this.endTs = endTs;
+      const lastTs = this.map.maxKey();
+      if (lastTs) {
+        const data = this.map.get(lastTs);
+        const interval = calculateAggIntervalWithSubscriptionTimeWindow(this.subsTw, endTs, data.ts, this.aggType);
+        data.interval = interval;
+        data.ts = interval[0] + Math.floor((interval[1] - interval[0]) / 2);
+      }
+    }
+  }
+
+  forEach(callback: (value: AggData, key: number, map: BTree<number, AggData>) => void, thisArg?: any) {
     this.map.forEach(callback, thisArg);
   }
 
@@ -67,45 +105,43 @@ class AggDataMap {
 }
 
 class AggregationMap {
-  aggMap: {[key: string]: AggDataMap} = {};
-
-  detectRangeChanged(): boolean {
-    let changed = false;
-    for (const key of Object.keys(this.aggMap)) {
-      const aggDataMap = this.aggMap[key];
-      if (aggDataMap.rangeChanged) {
-        changed = true;
-        aggDataMap.rangeChanged = false;
-      }
-    }
-    return changed;
-  }
-
-  clearRangeChangedFlags() {
-    for (const key of Object.keys(this.aggMap)) {
-      this.aggMap[key].rangeChanged = false;
-    }
-  }
+  aggMap: {[id: number]: AggDataMap} = {};
 }
 
 declare type AggFunction = (aggData: AggData, value?: any) => void;
 
 const avg: AggFunction = (aggData: AggData, value?: any) => {
   aggData.count++;
-  aggData.sum += value;
-  aggData.aggValue = aggData.sum / aggData.count;
+  if (isNumber(value)) {
+    aggData.sum = aggData.aggValue * (aggData.count - 1) + value;
+    aggData.aggValue = aggData.sum / aggData.count;
+  } else {
+    aggData.aggValue = value;
+  }
 };
 
 const min: AggFunction = (aggData: AggData, value?: any) => {
-  aggData.aggValue = Math.min(aggData.aggValue, value);
+  if (isNumber(value)) {
+    aggData.aggValue = Math.min(aggData.aggValue, value);
+  } else {
+    aggData.aggValue = value;
+  }
 };
 
 const max: AggFunction = (aggData: AggData, value?: any) => {
-  aggData.aggValue = Math.max(aggData.aggValue, value);
+  if (isNumber(value)) {
+    aggData.aggValue = Math.max(aggData.aggValue, value);
+  } else {
+    aggData.aggValue = value;
+  }
 };
 
 const sum: AggFunction = (aggData: AggData, value?: any) => {
-  aggData.aggValue = aggData.aggValue + value;
+  if (isNumber(value)) {
+    aggData.aggValue = aggData.aggValue + value;
+  } else {
+    aggData.aggValue = value;
+  }
 };
 
 const count: AggFunction = (aggData: AggData) => {
@@ -117,11 +153,29 @@ const none: AggFunction = (aggData: AggData, value?: any) => {
   aggData.aggValue = value;
 };
 
+const MAX_INTERVAL_TIMEOUT = Math.pow(2,31)-1;
+
 export class DataAggregator {
 
-  private dataBuffer: SubscriptionData = {};
-  private data: SubscriptionData;
-  private readonly lastPrevKvPairData: {[key: string]: [number, any]};
+  constructor(private onDataCb: onAggregatedData,
+              private tsKeys: AggKey[],
+              private isLatestDataAgg: boolean,
+              private subsTw: SubscriptionTimewindow,
+              private utils: UtilsService,
+              private ignoreDataUpdateOnIntervalTick: boolean) {
+    this.tsKeys.forEach((key) => {
+      if (!this.dataBuffer[key.id]) {
+        this.dataBuffer[key.id] = [];
+      }
+    });
+    if (this.subsTw.aggregation.stateData) {
+      this.lastPrevKvPairData = {};
+    }
+  }
+
+  private dataBuffer: IndexedData = [];
+  private data: IndexedData;
+  private readonly lastPrevKvPairData: {[id: number]: DataEntry};
 
   private aggregationMap: AggregationMap;
 
@@ -129,9 +183,7 @@ export class DataAggregator {
   private resetPending = false;
   private updatedData = false;
 
-  private noAggregation = this.subsTw.aggregation.type === AggregationType.NONE;
-  private aggregationTimeout = Math.max(this.subsTw.aggregation.interval, 1000);
-  private readonly aggFunction: AggFunction;
+  private aggregationTimeout = this.isLatestDataAgg ? 1000 : Math.max(IntervalMath.numberValue(this.subsTw.aggregation.interval), 1000);
 
   private intervalTimeoutHandle: Timeout;
   private intervalScheduledTime: number;
@@ -140,38 +192,29 @@ export class DataAggregator {
   private endTs: number;
   private elapsed: number;
 
-  constructor(private onDataCb: onAggregatedData,
-              private tsKeyNames: string[],
-              private subsTw: SubscriptionTimewindow,
-              private utils: UtilsService,
-              private ignoreDataUpdateOnIntervalTick: boolean) {
-    this.tsKeyNames.forEach((key) => {
-      this.dataBuffer[key] = [];
-    });
-    if (this.subsTw.aggregation.stateData) {
-      this.lastPrevKvPairData = {};
+  private static convertValue(val: string, noAggregation: boolean): any {
+    if (val && isNumeric(val) && (!noAggregation || noAggregation && Number(val).toString() === val)) {
+      return Number(val);
     }
-    switch (this.subsTw.aggregation.type) {
+    return val;
+  }
+
+  private static getAggFunction(aggType: AggregationType): AggFunction {
+    switch (aggType) {
       case AggregationType.MIN:
-        this.aggFunction = min;
-        break;
+        return min;
       case AggregationType.MAX:
-        this.aggFunction = max;
-        break;
+        return max;
       case AggregationType.AVG:
-        this.aggFunction = avg;
-        break;
+        return avg;
       case AggregationType.SUM:
-        this.aggFunction = sum;
-        break;
+        return sum;
       case AggregationType.COUNT:
-        this.aggFunction = count;
-        break;
+        return count;
       case AggregationType.NONE:
-        this.aggFunction = none;
-        break;
+        return none;
       default:
-        this.aggFunction = avg;
+        return avg;
     }
   }
 
@@ -190,10 +233,10 @@ export class DataAggregator {
     this.intervalScheduledTime = this.utils.currentPerfTime();
     this.calculateStartEndTs();
     this.elapsed = 0;
-    this.aggregationTimeout = Math.max(this.subsTw.aggregation.interval, 1000);
+    this.aggregationTimeout = this.isLatestDataAgg ? 1000 : Math.max(IntervalMath.numberValue(this.subsTw.aggregation.interval), 1000);
     this.resetPending = true;
     this.updatedData = false;
-    this.intervalTimeoutHandle = setTimeout(this.onInterval.bind(this), this.aggregationTimeout);
+    this.intervalTimeoutHandle = setTimeout(this.onInterval.bind(this), Math.min(this.aggregationTimeout, MAX_INTERVAL_TIMEOUT));
   }
 
   public destroy() {
@@ -204,7 +247,7 @@ export class DataAggregator {
     this.aggregationMap = null;
   }
 
-  public onData(data: SubscriptionDataHolder, update: boolean, history: boolean, detectChanges: boolean) {
+  public onData(data: IndexedSubscriptionData, update: boolean, history: boolean, detectChanges: boolean) {
     this.updatedData = true;
     if (!this.dataReceived || this.resetPending) {
       let updateIntervalScheduledTime = true;
@@ -219,24 +262,21 @@ export class DataAggregator {
       }
       if (update) {
         this.aggregationMap = new AggregationMap();
-        this.updateAggregatedData(data.data);
+        this.updateAggregatedData(data);
       } else {
-        this.aggregationMap = this.processAggregatedData(data.data);
+        this.aggregationMap = this.processAggregatedData(data);
       }
       if (updateIntervalScheduledTime) {
         this.intervalScheduledTime = this.utils.currentPerfTime();
       }
-      this.aggregationMap.clearRangeChangedFlags();
       this.onInterval(history, detectChanges);
     } else {
-      this.updateAggregatedData(data.data);
+      this.updateAggregatedData(data);
       if (history) {
         this.intervalScheduledTime = this.utils.currentPerfTime();
         this.onInterval(history, detectChanges);
       } else {
-        if (this.aggregationMap.detectRangeChanged()) {
-          this.onInterval(false, detectChanges, true);
-        }
+        this.onInterval(false, detectChanges, true);
       }
     }
   }
@@ -257,7 +297,7 @@ export class DataAggregator {
     }
   }
 
-  private onInterval(history?: boolean, detectChanges?: boolean, rangeChanged?: boolean) {
+  private onInterval(history?: boolean, detectChanges?: boolean, dataChanged?: boolean) {
     const now = this.utils.currentPerfTime();
     this.elapsed += now - this.intervalScheduledTime;
     this.intervalScheduledTime = now;
@@ -265,11 +305,11 @@ export class DataAggregator {
       clearTimeout(this.intervalTimeoutHandle);
       this.intervalTimeoutHandle = null;
     }
-    const intervalTimeout = rangeChanged ? this.aggregationTimeout - this.elapsed : this.aggregationTimeout;
+    const intervalTimeout = dataChanged ? this.aggregationTimeout - this.elapsed : this.aggregationTimeout;
     if (!history) {
-      const delta = Math.floor(this.elapsed / this.subsTw.aggregation.interval);
-      if (delta || !this.data || rangeChanged) {
-        const tickTs = delta * this.subsTw.aggregation.interval;
+      const delta = Math.floor(this.elapsed / this.aggregationTimeout);
+      if (delta || !this.data || dataChanged) {
+        const tickTs = delta * this.aggregationTimeout;
         if (this.subsTw.quickInterval) {
           const startEndTime = calculateIntervalStartEndTime(this.subsTw.quickInterval, this.subsTw.timezone);
           this.startTs = startEndTime[0] + this.subsTw.tsOffset;
@@ -278,8 +318,11 @@ export class DataAggregator {
           this.startTs += tickTs;
           this.endTs += tickTs;
         }
+        if (this.subsTw.aggregation.type !== AggregationType.NONE) {
+          this.updateLastInterval();
+        }
         this.data = this.updateData();
-        this.elapsed = this.elapsed - delta * this.subsTw.aggregation.interval;
+        this.elapsed = this.elapsed - delta * this.aggregationTimeout;
       }
     } else {
       this.data = this.updateData();
@@ -289,47 +332,56 @@ export class DataAggregator {
       this.updatedData = false;
     }
     if (!history) {
-      this.intervalTimeoutHandle = setTimeout(this.onInterval.bind(this), intervalTimeout);
+      this.intervalTimeoutHandle = setTimeout(this.onInterval.bind(this), Math.min(intervalTimeout, MAX_INTERVAL_TIMEOUT));
     }
   }
 
-  private updateData(): SubscriptionData {
-    this.tsKeyNames.forEach((key) => {
-      this.dataBuffer[key] = [];
+  private updateData(): IndexedData {
+    this.dataBuffer = [];
+    this.tsKeys.forEach((key) => {
+      if (!this.dataBuffer[key.id]) {
+        this.dataBuffer[key.id] = [];
+      }
     });
-    for (const key of Object.keys(this.aggregationMap.aggMap)) {
-      const aggKeyData = this.aggregationMap.aggMap[key];
-      let keyData = this.dataBuffer[key];
-      aggKeyData.forEach((aggData, aggTimestamp) => {
-        if (aggTimestamp < this.startTs) {
+    for (const idStr of Object.keys(this.aggregationMap.aggMap)) {
+      const id = Number(idStr);
+      const aggKeyData = this.aggregationMap.aggMap[id];
+      const aggKey = this.aggKeyById(id);
+      const noAggregation = aggKey.agg === AggregationType.NONE;
+      let keyData = this.dataBuffer[id];
+      const deletedKeys: number[] = [];
+      aggKeyData.forEach((aggData, aggStartTs) => {
+        if (aggStartTs < this.startTs) {
           if (this.subsTw.aggregation.stateData &&
-            (!this.lastPrevKvPairData[key] || this.lastPrevKvPairData[key][0] < aggTimestamp)) {
-            this.lastPrevKvPairData[key] = [aggTimestamp, aggData.aggValue];
+            (!this.lastPrevKvPairData[id] || this.lastPrevKvPairData[id][0] < aggData.ts)) {
+            this.lastPrevKvPairData[id] = [aggData.ts, aggData.aggValue, aggData.interval];
           }
-          aggKeyData.delete(aggTimestamp);
+          deletedKeys.push(aggStartTs);
           this.updatedData = true;
-        } else if (aggTimestamp < this.endTs) {
-          const kvPair: [number, any] = [aggTimestamp, aggData.aggValue];
+        } else if (aggData.ts < this.endTs || noAggregation) {
+          const kvPair: DataEntry = [aggData.ts, aggData.aggValue, aggData.interval];
           keyData.push(kvPair);
         }
       });
+      deletedKeys.forEach(ts => aggKeyData.delete(ts));
       keyData.sort((set1, set2) => set1[0] - set2[0]);
       if (this.subsTw.aggregation.stateData) {
-        this.updateStateBounds(keyData, deepClone(this.lastPrevKvPairData[key]));
+        this.updateStateBounds(keyData, deepClone(this.lastPrevKvPairData[id]));
       }
       if (keyData.length > this.subsTw.aggregation.limit) {
         keyData = keyData.slice(keyData.length - this.subsTw.aggregation.limit);
       }
-      this.dataBuffer[key] = keyData;
+      this.dataBuffer[id] = keyData;
     }
     return this.dataBuffer;
   }
 
-  private updateStateBounds(keyData: [number, any][], lastPrevKvPair: [number, any]) {
+  private updateStateBounds(keyData: DataSet, lastPrevKvPair: DataEntry) {
     if (lastPrevKvPair) {
       lastPrevKvPair[0] = this.startTs;
+      lastPrevKvPair[2] = [this.startTs, this.startTs];
     }
-    let firstKvPair;
+    let firstKvPair: DataEntry;
     if (!keyData.length) {
       if (lastPrevKvPair) {
         firstKvPair = lastPrevKvPair;
@@ -348,71 +400,95 @@ export class DataAggregator {
       if (lastKvPair[0] < this.endTs) {
         lastKvPair = deepClone(lastKvPair);
         lastKvPair[0] = this.endTs;
+        lastKvPair[2] = [this.endTs, this.endTs];
         keyData.push(lastKvPair);
       }
     }
   }
 
-  private processAggregatedData(data: SubscriptionData): AggregationMap {
-    const isCount = this.subsTw.aggregation.type === AggregationType.COUNT;
+  private processAggregatedData(data: IndexedSubscriptionData): AggregationMap {
     const aggregationMap = new AggregationMap();
-    for (const key of Object.keys(data)) {
-      let aggKeyData = aggregationMap.aggMap[key];
+    for (const idStr of Object.keys(data)) {
+      const id = Number(idStr);
+      const aggKey = this.aggKeyById(id);
+      const aggType = aggKey.agg;
+      const isCount = aggType === AggregationType.COUNT;
+      const noAggregation = aggType === AggregationType.NONE;
+      let aggKeyData = aggregationMap.aggMap[id];
       if (!aggKeyData) {
-        aggKeyData = new AggDataMap();
-        aggregationMap.aggMap[key] = aggKeyData;
+        aggKeyData = new AggDataMap(this.subsTw, this.endTs, aggType);
+        aggregationMap.aggMap[id] = aggKeyData;
       }
-      const keyData = data[key];
+      const keyData = data[id];
       keyData.forEach((kvPair) => {
         const timestamp = kvPair[0];
-        const value = this.convertValue(kvPair[1]);
-        const aggKey = timestamp;
-        const aggData = {
-          count: isCount ? value : 1,
+        const value = DataAggregator.convertValue(kvPair[1], noAggregation);
+        let interval: [number, number] = [timestamp, timestamp];
+        if (!noAggregation) {
+          interval = aggKeyData.calculateAggInterval(timestamp);
+        }
+        const ts = interval[0] + Math.floor((interval[1] - interval[0]) / 2);
+        const aggData: AggData = {
+          count: isCount ? value : isDefinedAndNotNull(kvPair[2]) ? kvPair[2] : 1,
           sum: value,
-          aggValue: value
+          aggValue: value,
+          ts,
+          interval
         };
-        aggKeyData.set(aggKey, aggData);
+        aggKeyData.set(interval[0], aggData);
       });
     }
     return aggregationMap;
   }
 
-  private updateAggregatedData(data: SubscriptionData) {
-    const isCount = this.subsTw.aggregation.type === AggregationType.COUNT;
-    for (const key of Object.keys(data)) {
-      let aggKeyData = this.aggregationMap.aggMap[key];
+  private updateAggregatedData(data: IndexedSubscriptionData) {
+    for (const idStr of Object.keys(data)) {
+      const id = Number(idStr);
+      const aggKey = this.aggKeyById(id);
+      const aggType = aggKey.agg;
+      const isCount = aggType === AggregationType.COUNT;
+      const noAggregation = aggType === AggregationType.NONE;
+      let aggKeyData = this.aggregationMap.aggMap[id];
       if (!aggKeyData) {
-        aggKeyData = new AggDataMap();
-        this.aggregationMap.aggMap[key] = aggKeyData;
+        aggKeyData = new AggDataMap(this.subsTw, this.endTs, aggType);
+        this.aggregationMap.aggMap[id] = aggKeyData;
       }
-      const keyData = data[key];
+      const keyData = data[id];
       keyData.forEach((kvPair) => {
         const timestamp = kvPair[0];
-        const value = this.convertValue(kvPair[1]);
-        const aggTimestamp = this.noAggregation ? timestamp : (this.startTs +
-          Math.floor((timestamp - this.startTs) / this.subsTw.aggregation.interval) *
-          this.subsTw.aggregation.interval + this.subsTw.aggregation.interval / 2);
-        let aggData = aggKeyData.get(aggTimestamp);
+        const value = DataAggregator.convertValue(kvPair[1], noAggregation);
+        let aggData = aggKeyData.findDataForTs(timestamp);
         if (!aggData) {
+          let interval: [number, number] = [timestamp, timestamp];
+          if (!noAggregation) {
+            interval = aggKeyData.calculateAggInterval(timestamp);
+          }
+          const ts = interval[0] + Math.floor((interval[1] - interval[0]) / 2);
           aggData = {
-            count: 1,
+            count: isDefinedAndNotNull(kvPair[2]) ? kvPair[2] : 1,
             sum: value,
-            aggValue: isCount ? 1 : value
+            aggValue: isCount ? 1 : value,
+            ts,
+            interval
           };
-          aggKeyData.set(aggTimestamp, aggData);
+          aggKeyData.set(interval[0], aggData);
         } else {
-          this.aggFunction(aggData, value);
+          DataAggregator.getAggFunction(aggType)(aggData, value);
         }
       });
     }
   }
 
-  private convertValue(val: string): any {
-    if (!this.noAggregation || val && isNumeric(val) && Number(val).toString() === val) {
-      return Number(val);
+  private updateLastInterval() {
+    for (const idStr of Object.keys(this.aggregationMap.aggMap)) {
+      const id = Number(idStr);
+      const aggKeyData = this.aggregationMap.aggMap[id];
+      aggKeyData.updateLastInterval(this.endTs);
     }
-    return val;
+  }
+
+  private aggKeyById(id: number): AggKey {
+    return this.tsKeys.find(key => key.id === id);
   }
 
 }

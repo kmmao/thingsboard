@@ -1,5 +1,5 @@
 /**
- * Copyright © 2016-2021 The Thingsboard Authors
+ * Copyright © 2016-2025 The Thingsboard Authors
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -17,11 +17,13 @@ package org.thingsboard.server.dao.model.sql;
 
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.node.ObjectNode;
+import jakarta.persistence.Column;
+import jakarta.persistence.Convert;
+import jakarta.persistence.MappedSuperclass;
 import lombok.Data;
 import lombok.EqualsAndHashCode;
-import org.hibernate.annotations.Type;
-import org.hibernate.annotations.TypeDef;
-import org.hibernate.annotations.TypeDefs;
+import org.hibernate.annotations.JdbcType;
+import org.hibernate.dialect.PostgreSQLJsonPGObjectJsonbType;
 import org.thingsboard.common.util.JacksonUtil;
 import org.thingsboard.server.common.data.Device;
 import org.thingsboard.server.common.data.device.data.DeviceData;
@@ -30,24 +32,16 @@ import org.thingsboard.server.common.data.id.DeviceId;
 import org.thingsboard.server.common.data.id.DeviceProfileId;
 import org.thingsboard.server.common.data.id.OtaPackageId;
 import org.thingsboard.server.common.data.id.TenantId;
-import org.thingsboard.server.dao.model.BaseSqlEntity;
+import org.thingsboard.server.dao.model.BaseVersionedEntity;
 import org.thingsboard.server.dao.model.ModelConstants;
-import org.thingsboard.server.dao.model.SearchTextEntity;
-import org.thingsboard.server.dao.util.mapping.JsonBinaryType;
-import org.thingsboard.server.dao.util.mapping.JsonStringType;
+import org.thingsboard.server.dao.util.mapping.JsonConverter;
 
-import javax.persistence.Column;
-import javax.persistence.MappedSuperclass;
 import java.util.UUID;
 
 @Data
 @EqualsAndHashCode(callSuper = true)
-@TypeDefs({
-        @TypeDef(name = "json", typeClass = JsonStringType.class),
-        @TypeDef(name = "jsonb", typeClass = JsonBinaryType.class)
-})
 @MappedSuperclass
-public abstract class AbstractDeviceEntity<T extends Device> extends BaseSqlEntity<T> implements SearchTextEntity<T> {
+public abstract class AbstractDeviceEntity<T extends Device> extends BaseVersionedEntity<T> {
 
     @Column(name = ModelConstants.DEVICE_TENANT_ID_PROPERTY, columnDefinition = "uuid")
     private UUID tenantId;
@@ -64,10 +58,7 @@ public abstract class AbstractDeviceEntity<T extends Device> extends BaseSqlEnti
     @Column(name = ModelConstants.DEVICE_LABEL_PROPERTY)
     private String label;
 
-    @Column(name = ModelConstants.SEARCH_TEXT_PROPERTY)
-    private String searchText;
-
-    @Type(type = "json")
+    @Convert(converter = JsonConverter.class)
     @Column(name = ModelConstants.DEVICE_ADDITIONAL_INFO_PROPERTY)
     private JsonNode additionalInfo;
 
@@ -80,19 +71,20 @@ public abstract class AbstractDeviceEntity<T extends Device> extends BaseSqlEnti
     @Column(name = ModelConstants.DEVICE_SOFTWARE_ID_PROPERTY, columnDefinition = "uuid")
     private UUID softwareId;
 
-    @Type(type = "jsonb")
+    @Convert(converter = JsonConverter.class)
+    @JdbcType(PostgreSQLJsonPGObjectJsonbType.class)
     @Column(name = ModelConstants.DEVICE_DEVICE_DATA_PROPERTY, columnDefinition = "jsonb")
     private JsonNode deviceData;
+
+    @Column(name = ModelConstants.EXTERNAL_ID_PROPERTY, columnDefinition = "uuid")
+    private UUID externalId;
 
     public AbstractDeviceEntity() {
         super();
     }
 
-    public AbstractDeviceEntity(Device device) {
-        if (device.getId() != null) {
-            this.setUuid(device.getUuidId());
-        }
-        this.setCreatedTime(device.getCreatedTime());
+    public AbstractDeviceEntity(T device) {
+        super(device);
         if (device.getTenantId() != null) {
             this.tenantId = device.getTenantId().getId();
         }
@@ -113,11 +105,13 @@ public abstract class AbstractDeviceEntity<T extends Device> extends BaseSqlEnti
         this.type = device.getType();
         this.label = device.getLabel();
         this.additionalInfo = device.getAdditionalInfo();
+        if (device.getExternalId() != null) {
+            this.externalId = device.getExternalId().getId();
+        }
     }
 
-    public AbstractDeviceEntity(DeviceEntity deviceEntity) {
-        this.setId(deviceEntity.getId());
-        this.setCreatedTime(deviceEntity.getCreatedTime());
+    public AbstractDeviceEntity(AbstractDeviceEntity<T> deviceEntity) {
+        super(deviceEntity);
         this.tenantId = deviceEntity.getTenantId();
         this.customerId = deviceEntity.getCustomerId();
         this.deviceProfileId = deviceEntity.getDeviceProfileId();
@@ -125,27 +119,18 @@ public abstract class AbstractDeviceEntity<T extends Device> extends BaseSqlEnti
         this.type = deviceEntity.getType();
         this.name = deviceEntity.getName();
         this.label = deviceEntity.getLabel();
-        this.searchText = deviceEntity.getSearchText();
         this.additionalInfo = deviceEntity.getAdditionalInfo();
         this.firmwareId = deviceEntity.getFirmwareId();
         this.softwareId = deviceEntity.getSoftwareId();
-    }
-
-    @Override
-    public String getSearchTextSource() {
-        return name;
-    }
-
-    @Override
-    public void setSearchText(String searchText) {
-        this.searchText = searchText;
+        this.externalId = deviceEntity.getExternalId();
     }
 
     protected Device toDevice() {
         Device device = new Device(new DeviceId(getUuid()));
         device.setCreatedTime(createdTime);
+        device.setVersion(version);
         if (tenantId != null) {
-            device.setTenantId(new TenantId(tenantId));
+            device.setTenantId(TenantId.fromUUID(tenantId));
         }
         if (customerId != null) {
             device.setCustomerId(new CustomerId(customerId));
@@ -164,6 +149,9 @@ public abstract class AbstractDeviceEntity<T extends Device> extends BaseSqlEnti
         device.setType(type);
         device.setLabel(label);
         device.setAdditionalInfo(additionalInfo);
+        if (externalId != null) {
+            device.setExternalId(new DeviceId(externalId));
+        }
         return device;
     }
 

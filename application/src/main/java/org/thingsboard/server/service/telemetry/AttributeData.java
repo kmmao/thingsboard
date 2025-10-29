@@ -1,5 +1,5 @@
 /**
- * Copyright © 2016-2021 The Thingsboard Authors
+ * Copyright © 2016-2025 The Thingsboard Authors
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -15,6 +15,9 @@
  */
 package org.thingsboard.server.service.telemetry;
 
+import io.swagger.v3.oas.annotations.media.Schema;
+
+@Schema
 public class AttributeData implements Comparable<AttributeData>{
 
     private final long lastUpdateTs;
@@ -28,14 +31,17 @@ public class AttributeData implements Comparable<AttributeData>{
         this.value = value;
     }
 
+    @Schema(description = "Timestamp last updated attribute, in milliseconds", example = "1609459200000", accessMode = Schema.AccessMode.READ_ONLY)
     public long getLastUpdateTs() {
         return lastUpdateTs;
     }
 
+    @Schema(description = "String representing attribute key", example = "active", accessMode = Schema.AccessMode.READ_ONLY)
     public String getKey() {
         return key;
     }
 
+    @Schema(description = "Object representing value of attribute key", example = "false", accessMode = Schema.AccessMode.READ_ONLY)
     public Object getValue() {
         return value;
     }

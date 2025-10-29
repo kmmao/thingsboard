@@ -1,5 +1,5 @@
 /**
- * Copyright © 2016-2021 The Thingsboard Authors
+ * Copyright © 2016-2025 The Thingsboard Authors
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -35,9 +35,15 @@ div.tb-dashboard-page {
     position: relative;
     padding-left: 20px;
     max-height: 60px;
-    mat-form-field {
-      .mat-form-field-infix {
-        width: 100%;
+    .mat-mdc-form-field.mat-form-field-appearance-fill.tb-appearance-transparent {
+      .mat-mdc-text-field-wrapper {
+        .mat-mdc-form-field-infix {
+          width: 100%;
+          padding-top: 20px;
+          .mat-mdc-floating-label {
+            top: 24px;
+          }
+        }
       }
     }
     input.tb-dashboard-title {
@@ -69,6 +75,11 @@ div.tb-dashboard-page {
       right: 18px;
       transition: right .3s cubic-bezier(.55, 0, .55, .2) .2s;
     }
+  }
+
+  .mat-divider-vertical.tb-toolbar-divider {
+    border-right-color: rgba(255,255,255,0.75);
+    height: 30px;
   }
 
   .tb-dashboard-container {
@@ -114,7 +125,31 @@ div.tb-dashboard-page {
     mat-drawer-container.tb-dashboard-layouts {
       width: 100%;
       &.tb-shrinked {
-        width: 40%;
+        width: max(40%, calc(100% - 956px));
+
+        @media screen and (min-width: 2000px) {
+          width: max(40%, calc(100% - 1192px));
+        }
+      }
+      #tb-main-layout {
+        display: flex;
+
+        tb-dashboard-layout {
+          width: 100%;
+        }
+
+        .layout-filler {
+          flex: 1;
+          background: repeating-linear-gradient(-16deg, #d3d3d3, #d3d3d3 3px, #e0e0e0 3px, #e0e0e0 11px);
+          border-bottom: 2px dashed #bdbdbd;
+          border-right: 2px dashed #bdbdbd;
+
+          writing-mode: vertical-rl;
+          text-align: center;
+          transform: rotate(180deg);
+          color: #616161;
+          letter-spacing: .25px;
+        }
       }
     }
 
@@ -124,12 +159,19 @@ div.tb-dashboard-page {
       }
 
       @media #{$mat-gt-md} {
-        width: 75% !important;
+        width: min(85%, 956px) !important;
       }
 
-      @media #{$mat-gt-xl} {
-        width: 60% !important;
+      @media screen and (min-width: 2000px) {
+        width: min(60%, 1192px) !important;
       }
+    }
+  }
+
+  section.tb-header-buttons.tb-enter-edit-mode {
+    top: 2px;
+    .mdc-fab.tb-btn-edit {
+      opacity: .5;
     }
   }
 

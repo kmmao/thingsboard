@@ -1,5 +1,5 @@
 ///
-/// Copyright © 2016-2021 The Thingsboard Authors
+/// Copyright © 2016-2025 The Thingsboard Authors
 ///
 /// Licensed under the Apache License, Version 2.0 (the "License");
 /// you may not use this file except in compliance with the License.
@@ -15,8 +15,9 @@
 ///
 
 import { Injectable } from '@angular/core';
-import { defaultHttpOptionsFromConfig, RequestConfig } from './http-utils';
-import { Observable, ReplaySubject } from 'rxjs';
+import { createDefaultHttpOptions, defaultHttpOptionsFromConfig, RequestConfig } from './http-utils';
+import { catchError, Observable, of, ReplaySubject, throwError, timeout } from 'rxjs';
+import { map, switchMap } from "rxjs/operators";
 import { HttpClient } from '@angular/common/http';
 import { PageLink } from '@shared/models/page/page-link';
 import { PageData } from '@shared/models/page/page-data';
@@ -26,10 +27,17 @@ import {
   Device,
   DeviceCredentials,
   DeviceInfo,
-  DeviceSearchQuery
-} from '@app/shared/models/device.models';
-import { EntitySubtype } from '@app/shared/models/entity-type.models';
+  DeviceInfoQuery,
+  DeviceSearchQuery,
+  PublishTelemetryCommand,
+  SaveDeviceParams
+} from '@shared/models/device.models';
+import { EntitySubtype } from '@shared/models/entity-type.models';
 import { AuthService } from '@core/auth/auth.service';
+import { BulkImportRequest, BulkImportResult } from '@shared/import-export/import-export.models';
+import { PersistentRpc, RpcStatus } from '@shared/models/rpc.models';
+import { ResourcesService } from '@core/services/resources.service';
+import { SaveEntityParams } from '@shared/models/entity.models';
 
 @Injectable({
   providedIn: 'root'
@@ -37,8 +45,14 @@ import { AuthService } from '@core/auth/auth.service';
 export class DeviceService {
 
   constructor(
-    private http: HttpClient
+    private http: HttpClient,
+    private resourcesService: ResourcesService
   ) { }
+
+  public getDeviceInfosByQuery(deviceInfoQuery: DeviceInfoQuery, config?: RequestConfig): Observable<PageData<DeviceInfo>> {
+    return this.http.get<PageData<DeviceInfo>>(`/api${deviceInfoQuery.toQuery()}`,
+      defaultHttpOptionsFromConfig(config));
+  }
 
   public getTenantDeviceInfos(pageLink: PageLink, type: string = '',
                               config?: RequestConfig): Observable<PageData<DeviceInfo>> {
@@ -76,8 +90,19 @@ export class DeviceService {
     return this.http.get<DeviceInfo>(`/api/device/info/${deviceId}`, defaultHttpOptionsFromConfig(config));
   }
 
-  public saveDevice(device: Device, config?: RequestConfig): Observable<Device> {
-    return this.http.post<Device>('/api/device', device, defaultHttpOptionsFromConfig(config));
+  public saveDevice(device: Device, config?: RequestConfig): Observable<Device>;
+  public saveDevice(device: Device, saveParams?: SaveDeviceParams, config?: RequestConfig): Observable<Device>;
+  public saveDevice(device: Device, saveParamsOrConfig?: SaveDeviceParams | RequestConfig, config?: RequestConfig): Observable<Device> {
+    return this.http.post<Device>('/api/device', device, createDefaultHttpOptions(saveParamsOrConfig, config));
+  }
+
+  public saveDeviceWithCredentials(device: Device, credentials: DeviceCredentials, config?: RequestConfig): Observable<Device>;
+  public saveDeviceWithCredentials(device: Device, credentials: DeviceCredentials, saveParams: SaveEntityParams, config?: RequestConfig): Observable<Device>;
+  public saveDeviceWithCredentials(device: Device, credentials: DeviceCredentials, saveParamsOrConfig?: SaveEntityParams | RequestConfig, config?: RequestConfig): Observable<Device> {
+    return this.http.post<Device>('/api/device-with-credentials', {
+      device,
+      credentials
+    }, createDefaultHttpOptions(saveParamsOrConfig, config));
   }
 
   public deleteDevice(deviceId: string, config?: RequestConfig) {
@@ -130,11 +155,28 @@ export class DeviceService {
   }
 
   public sendOneWayRpcCommand(deviceId: string, requestBody: any, config?: RequestConfig): Observable<any> {
-    return this.http.post<Device>(`/api/plugins/rpc/oneway/${deviceId}`, requestBody, defaultHttpOptionsFromConfig(config));
+    return this.http.post<any>(`/api/rpc/oneway/${deviceId}`, requestBody, defaultHttpOptionsFromConfig(config));
   }
 
   public sendTwoWayRpcCommand(deviceId: string, requestBody: any, config?: RequestConfig): Observable<any> {
-    return this.http.post<Device>(`/api/plugins/rpc/twoway/${deviceId}`, requestBody, defaultHttpOptionsFromConfig(config));
+    return this.http.post<any>(`/api/rpc/twoway/${deviceId}`, requestBody, defaultHttpOptionsFromConfig(config));
+  }
+
+  public getPersistedRpc(rpcId: string, fullResponse = false, config?: RequestConfig): Observable<PersistentRpc> {
+    return this.http.get<PersistentRpc>(`/api/rpc/persistent/${rpcId}`, defaultHttpOptionsFromConfig(config));
+  }
+
+  public deletePersistedRpc(rpcId: string, config?: RequestConfig) {
+    return this.http.delete<PersistentRpc>(`/api/rpc/persistent/${rpcId}`, defaultHttpOptionsFromConfig(config));
+  }
+
+  public getPersistedRpcRequests(deviceId: string, pageLink: PageLink,
+                                 rpcStatus?: RpcStatus, config?: RequestConfig): Observable<PageData<PersistentRpc>> {
+    let url = `/api/rpc/persistent/device/${deviceId}${pageLink.toQuery()}`;
+    if (rpcStatus && rpcStatus.length) {
+      url += `&rpcStatus=${rpcStatus}`;
+    }
+    return this.http.get<PageData<PersistentRpc>>(url, defaultHttpOptionsFromConfig(config));
   }
 
   public findByQuery(query: DeviceSearchQuery,
@@ -170,7 +212,85 @@ export class DeviceService {
   public getEdgeDevices(edgeId: string, pageLink: PageLink, type: string = '',
                         config?: RequestConfig): Observable<PageData<DeviceInfo>> {
     return this.http.get<PageData<DeviceInfo>>(`/api/edge/${edgeId}/devices${pageLink.toQuery()}&type=${type}`,
-      defaultHttpOptionsFromConfig(config))
+      defaultHttpOptionsFromConfig(config));
   }
 
+  public bulkImportDevices(entitiesData: BulkImportRequest, config?: RequestConfig): Observable<BulkImportResult> {
+    return this.http.post<BulkImportResult>('/api/device/bulk_import', entitiesData, defaultHttpOptionsFromConfig(config));
+  }
+
+  public getDevicePublishTelemetryCommands(deviceId: string, config?: RequestConfig): Observable<PublishTelemetryCommand> {
+    return this.http.get<PublishTelemetryCommand>(`/api/device-connectivity/${deviceId}`, defaultHttpOptionsFromConfig(config));
+  }
+
+  public downloadGatewayDockerComposeFile(deviceId: string): Observable<any> {
+    return this.resourcesService.downloadResource(`/api/device-connectivity/gateway-launch/${deviceId}/docker-compose/download`);
+  }
+
+  public rebootDevice(deviceId: string, isBootstrapServer: boolean, config?: RequestConfig): Observable<{
+    result: string,
+    msg: string
+  }> {
+    const rebootName = isBootstrapServer ? 'Bootstrap-Request Trigger' : 'Registration Update Trigger';
+    return this.sendTwoWayRpcCommand(deviceId, {method: 'DiscoverAll'}, config).pipe(
+      timeout(10000),
+      switchMap((response: any) => {
+        if (response.result && response.result.toUpperCase() === 'CONTENT') {
+          const resourceId = isBootstrapServer ? 9 : 8;
+          const resourcePath = `/1/0/${resourceId}`;
+          return this.rebootTrigger(deviceId, resourcePath, config).pipe(
+            map((responseReboot: any) => {
+              if (responseReboot.result === 'CHANGED') {
+                return {
+                  result: 'SUCCESS',
+                  msg: `<b>"${rebootName}"</b> - Started Successfully.`
+                };
+              } else {
+                return {
+                  result: 'ERROR',
+                  msg: `<b>"${rebootName}"</b> failed:<pre>${JSON.stringify(responseReboot, null, 2)}</pre>`
+                }
+              }
+            }),
+            catchError(err =>
+              of({
+                result: 'ERROR',
+                msg: `<b>"${rebootName}"</b> failed.<br>Error: ${err.message || err}`
+              })
+            )
+          );
+        } else {
+          return of({
+            result: 'ERROR',
+            msg: `<b>"${rebootName}"</b> failed.<br>Bad registration device with id = ${deviceId}.<br><b>"DiscoverAll"</b> - RPC result is not "CONTENT"`
+          });
+        }
+      }),
+      catchError(err =>
+        of({
+          result: 'ERROR',
+          msg: `<b>"${rebootName}"</b> failed.<br>Bad registration device with id = ${deviceId}.<br>Error: ${err.message || err}`
+        })
+      )
+    );
+  }
+
+  private rebootTrigger(deviceId: string, resourcePath: string, config?: RequestConfig): Observable<{ result: string, msg?: string }> {
+    return this.sendTwoWayRpcCommand(deviceId, {method: 'Execute', params: {id: resourcePath}}, config).pipe(
+      timeout(10000),
+      map(res => {
+        if (res?.result?.toUpperCase() === 'CHANGED') {
+          return {result: 'CHANGED'};
+        } else {
+          return {
+            result: `${res?.result}`,
+            msg: `${res?.error}`
+          }
+        }
+      }),
+      catchError(err => {
+        return throwError(() => err);
+      })
+    );
+  }
 }

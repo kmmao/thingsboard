@@ -1,5 +1,5 @@
 /**
- * Copyright © 2016-2021 The Thingsboard Authors
+ * Copyright © 2016-2025 The Thingsboard Authors
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -15,35 +15,43 @@
  */
 package org.thingsboard.rule.engine.metadata;
 
-import com.datastax.oss.driver.api.core.uuid.Uuids;
-import com.fasterxml.jackson.databind.ObjectMapper;
-import com.google.common.collect.Lists;
+import com.fasterxml.jackson.databind.JsonNode;
 import com.google.common.util.concurrent.Futures;
-import org.junit.Before;
-import org.junit.Test;
-import org.junit.runner.RunWith;
+import lombok.RequiredArgsConstructor;
+import org.junit.jupiter.api.Assertions;
+import org.junit.jupiter.api.BeforeEach;
+import org.junit.jupiter.api.Test;
+import org.junit.jupiter.api.extension.ExtendWith;
 import org.mockito.ArgumentCaptor;
+import org.mockito.ArgumentMatcher;
 import org.mockito.Mock;
-import org.mockito.junit.MockitoJUnitRunner;
+import org.mockito.junit.jupiter.MockitoExtension;
+import org.thingsboard.common.util.JacksonUtil;
+import org.thingsboard.common.util.ListeningExecutor;
+import org.thingsboard.rule.engine.TestDbCallbackExecutor;
 import org.thingsboard.rule.engine.api.TbContext;
 import org.thingsboard.rule.engine.api.TbNodeConfiguration;
 import org.thingsboard.rule.engine.api.TbNodeException;
+import org.thingsboard.rule.engine.util.TbMsgSource;
+import org.thingsboard.server.common.data.AttributeScope;
+import org.thingsboard.server.common.data.Customer;
 import org.thingsboard.server.common.data.Device;
 import org.thingsboard.server.common.data.User;
 import org.thingsboard.server.common.data.asset.Asset;
 import org.thingsboard.server.common.data.id.AssetId;
 import org.thingsboard.server.common.data.id.CustomerId;
 import org.thingsboard.server.common.data.id.DeviceId;
-import org.thingsboard.server.common.data.id.RuleChainId;
-import org.thingsboard.server.common.data.id.RuleNodeId;
+import org.thingsboard.server.common.data.id.EntityId;
+import org.thingsboard.server.common.data.id.TenantId;
 import org.thingsboard.server.common.data.id.UserId;
 import org.thingsboard.server.common.data.kv.AttributeKvEntry;
 import org.thingsboard.server.common.data.kv.BaseAttributeKvEntry;
 import org.thingsboard.server.common.data.kv.BasicTsKvEntry;
 import org.thingsboard.server.common.data.kv.StringDataEntry;
 import org.thingsboard.server.common.data.kv.TsKvEntry;
+import org.thingsboard.server.common.data.msg.TbMsgType;
+import org.thingsboard.server.common.data.util.TbPair;
 import org.thingsboard.server.common.msg.TbMsg;
-import org.thingsboard.server.common.msg.TbMsgDataType;
 import org.thingsboard.server.common.msg.TbMsgMetaData;
 import org.thingsboard.server.dao.asset.AssetService;
 import org.thingsboard.server.dao.attributes.AttributesService;
@@ -51,223 +59,450 @@ import org.thingsboard.server.dao.device.DeviceService;
 import org.thingsboard.server.dao.timeseries.TimeseriesService;
 import org.thingsboard.server.dao.user.UserService;
 
+import java.util.Arrays;
 import java.util.Collections;
-import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.NoSuchElementException;
+import java.util.UUID;
 
-import static org.junit.Assert.assertEquals;
-import static org.junit.Assert.assertTrue;
+import static org.assertj.core.api.Assertions.assertThat;
+import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertInstanceOf;
+import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.argThat;
 import static org.mockito.ArgumentMatchers.eq;
-import static org.mockito.ArgumentMatchers.same;
+import static org.mockito.Mockito.doReturn;
+import static org.mockito.Mockito.never;
+import static org.mockito.Mockito.times;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
-import static org.thingsboard.rule.engine.api.TbRelationTypes.FAILURE;
-import static org.thingsboard.server.common.data.DataConstants.SERVER_SCOPE;
 
-@RunWith(MockitoJUnitRunner.class)
+@ExtendWith(MockitoExtension.class)
 public class TbGetCustomerAttributeNodeTest {
 
+    private static final DeviceId DUMMY_DEVICE_ORIGINATOR = new DeviceId(UUID.randomUUID());
+    private static final TenantId TENANT_ID = new TenantId(UUID.randomUUID());
+    private static final CustomerId CUSTOMER_ID = new CustomerId(UUID.randomUUID());
+    private static final ListeningExecutor DB_EXECUTOR = new TestDbCallbackExecutor();
+    @Mock
+    private TbContext ctxMock;
+    @Mock
+    private AttributesService attributesServiceMock;
+    @Mock
+    private TimeseriesService timeseriesServiceMock;
+    @Mock
+    private UserService userServiceMock;
+    @Mock
+    private AssetService assetServiceMock;
+    @Mock
+    private DeviceService deviceServiceMock;
     private TbGetCustomerAttributeNode node;
-
-    @Mock
-    private TbContext ctx;
-
-    @Mock
-    private AttributesService attributesService;
-    @Mock
-    private TimeseriesService timeseriesService;
-    @Mock
-    private UserService userService;
-    @Mock
-    private AssetService assetService;
-    @Mock
-    private DeviceService deviceService;
-
+    private TbGetEntityDataNodeConfiguration config;
+    private TbNodeConfiguration nodeConfiguration;
     private TbMsg msg;
 
-    private RuleChainId ruleChainId = new RuleChainId(Uuids.timeBased());
-    private RuleNodeId ruleNodeId = new RuleNodeId(Uuids.timeBased());
-
-    @Before
-    public void init() throws TbNodeException {
-        TbGetEntityAttrNodeConfiguration config = new TbGetEntityAttrNodeConfiguration();
-        Map<String, String> attrMapping = new HashMap<>();
-        attrMapping.putIfAbsent("temperature", "tempo");
-        config.setAttrMapping(attrMapping);
-        config.setTelemetry(false);
-        ObjectMapper mapper = new ObjectMapper();
-        TbNodeConfiguration nodeConfiguration = new TbNodeConfiguration(mapper.valueToTree(config));
-
+    @BeforeEach
+    public void setUp() {
         node = new TbGetCustomerAttributeNode();
-        node.init(null, nodeConfiguration);
+        config = new TbGetEntityDataNodeConfiguration().defaultConfiguration();
+        nodeConfiguration = new TbNodeConfiguration(JacksonUtil.valueToTree(config));
     }
 
     @Test
-    public void errorThrownIfCannotLoadAttributes() {
-        UserId userId = new UserId(Uuids.timeBased());
-        CustomerId customerId = new CustomerId(Uuids.timeBased());
-        User user = new User();
-        user.setCustomerId(customerId);
+    public void givenConfigWithNullFetchTo_whenInit_thenException() {
+        // GIVEN
+        config.setFetchTo(null);
+        nodeConfiguration = new TbNodeConfiguration(JacksonUtil.valueToTree(config));
 
-        msg = TbMsg.newMsg( "USER", userId, new TbMsgMetaData(), TbMsgDataType.JSON, "{}", ruleChainId, ruleNodeId);
+        // WHEN
+        var exception = assertThrows(TbNodeException.class, () -> node.init(ctxMock, nodeConfiguration));
 
-        when(ctx.getUserService()).thenReturn(userService);
-        when(userService.findUserByIdAsync(any(), eq(userId))).thenReturn(Futures.immediateFuture(user));
-
-        when(ctx.getAttributesService()).thenReturn(attributesService);
-        when(attributesService.find(any(), eq(customerId), eq(SERVER_SCOPE), eq(Collections.singleton("temperature"))))
-                .thenThrow(new IllegalStateException("something wrong"));
-
-        node.onMsg(ctx, msg);
-        final ArgumentCaptor<Throwable> captor = ArgumentCaptor.forClass(Throwable.class);
-        verify(ctx).tellFailure(same(msg), captor.capture());
-
-        Throwable value = captor.getValue();
-        assertEquals("something wrong", value.getMessage());
-        assertTrue(msg.getMetaData().getData().isEmpty());
+        // THEN
+        assertThat(exception.getMessage()).isEqualTo("FetchTo option can't be null! Allowed values: " + Arrays.toString(TbMsgSource.values()));
+        verify(ctxMock, never()).tellSuccess(any());
     }
 
     @Test
-    public void errorThrownIfCannotLoadAttributesAsync() {
-        UserId userId = new UserId(Uuids.timeBased());
-        CustomerId customerId = new CustomerId(Uuids.timeBased());
-        User user = new User();
-        user.setCustomerId(customerId);
+    public void givenConfigWithNullDataToFetch_whenInit_thenException() {
+        // GIVEN
+        config.setDataToFetch(null);
+        nodeConfiguration = new TbNodeConfiguration(JacksonUtil.valueToTree(config));
 
-        msg = TbMsg.newMsg( "USER", userId, new TbMsgMetaData(), TbMsgDataType.JSON, "{}", ruleChainId, ruleNodeId);
+        // WHEN
+        var exception = assertThrows(TbNodeException.class, () -> node.init(ctxMock, nodeConfiguration));
 
-        when(ctx.getUserService()).thenReturn(userService);
-        when(userService.findUserByIdAsync(any(), eq(userId))).thenReturn(Futures.immediateFuture(user));
-
-        when(ctx.getAttributesService()).thenReturn(attributesService);
-        when(attributesService.find(any(), eq(customerId), eq(SERVER_SCOPE), eq(Collections.singleton("temperature"))))
-                .thenReturn(Futures.immediateFailedFuture(new IllegalStateException("something wrong")));
-
-        node.onMsg(ctx, msg);
-        final ArgumentCaptor<Throwable> captor = ArgumentCaptor.forClass(Throwable.class);
-        verify(ctx).tellFailure(same(msg), captor.capture());
-
-        Throwable value = captor.getValue();
-        assertEquals("something wrong", value.getMessage());
-        assertTrue(msg.getMetaData().getData().isEmpty());
+        // THEN
+        assertThat(exception.getMessage()).isEqualTo("DataToFetch property has invalid value: null. Only ATTRIBUTES and LATEST_TELEMETRY values supported!");
+        verify(ctxMock, never()).tellSuccess(any());
     }
 
     @Test
-    public void failedChainUsedIfCustomerCannotBeFound() {
-        UserId userId = new UserId(Uuids.timeBased());
-        CustomerId customerId = new CustomerId(Uuids.timeBased());
-        User user = new User();
-        user.setCustomerId(customerId);
+    public void givenConfigWithUnsupportedDataToFetch_whenInit_thenException() {
+        // GIVEN
+        config.setDataToFetch(DataToFetch.FIELDS);
+        nodeConfiguration = new TbNodeConfiguration(JacksonUtil.valueToTree(config));
 
-        msg = TbMsg.newMsg( "USER", userId, new TbMsgMetaData(), TbMsgDataType.JSON,"{}", ruleChainId, ruleNodeId);
+        // WHEN
+        var exception = assertThrows(TbNodeException.class, () -> node.init(ctxMock, nodeConfiguration));
 
-        when(ctx.getUserService()).thenReturn(userService);
-        when(userService.findUserByIdAsync(any(), eq(userId))).thenReturn(Futures.immediateFuture(null));
-
-
-        node.onMsg(ctx, msg);
-        verify(ctx).tellNext(msg, FAILURE);
-        assertTrue(msg.getMetaData().getData().isEmpty());
+        // THEN
+        assertThat(exception.getMessage()).isEqualTo("DataToFetch property has invalid value: FIELDS. Only ATTRIBUTES and LATEST_TELEMETRY values supported!");
+        verify(ctxMock, never()).tellSuccess(any());
     }
 
     @Test
-    public void customerAttributeAddedInMetadata() {
-        CustomerId customerId = new CustomerId(Uuids.timeBased());
-        msg = TbMsg.newMsg( "CUSTOMER", customerId, new TbMsgMetaData(), TbMsgDataType.JSON, "{}", ruleChainId, ruleNodeId);
-        entityAttributeFetched(customerId);
+    public void givenDefaultConfig_whenInit_thenOK() throws TbNodeException {
+        // GIVEN
+
+        // WHEN
+        node.init(ctxMock, nodeConfiguration);
+
+        // THEN
+        assertThat(node.config).isEqualTo(config);
+        assertThat(config.getDataMapping()).isEqualTo(Map.of("alarmThreshold", "threshold"));
+        assertThat(config.getDataToFetch()).isEqualTo(DataToFetch.ATTRIBUTES);
+        assertThat(node.fetchTo).isEqualTo(TbMsgSource.METADATA);
     }
 
     @Test
-    public void usersCustomerAttributesFetched() {
-        UserId userId = new UserId(Uuids.timeBased());
-        CustomerId customerId = new CustomerId(Uuids.timeBased());
-        User user = new User();
-        user.setCustomerId(customerId);
+    public void givenCustomConfig_whenInit_thenOK() throws TbNodeException {
+        // GIVEN
+        config.setDataMapping(Map.of(
+                "sourceAttr1", "targetKey1",
+                "sourceAttr2", "targetKey2",
+                "sourceAttr3", "targetKey3"));
+        config.setDataToFetch(DataToFetch.LATEST_TELEMETRY);
+        config.setFetchTo(TbMsgSource.DATA);
+        nodeConfiguration = new TbNodeConfiguration(JacksonUtil.valueToTree(config));
 
-        msg = TbMsg.newMsg( "USER", userId, new TbMsgMetaData(), TbMsgDataType.JSON, "{}", ruleChainId, ruleNodeId);
+        // WHEN
+        node.init(ctxMock, nodeConfiguration);
 
-        when(ctx.getUserService()).thenReturn(userService);
-        when(userService.findUserByIdAsync(any(), eq(userId))).thenReturn(Futures.immediateFuture(user));
-
-        entityAttributeFetched(customerId);
+        // THEN
+        assertThat(node.config).isEqualTo(config);
+        assertThat(config.getDataMapping()).isEqualTo(Map.of(
+                "sourceAttr1", "targetKey1",
+                "sourceAttr2", "targetKey2",
+                "sourceAttr3", "targetKey3"));
+        assertThat(config.getDataToFetch()).isEqualTo(DataToFetch.LATEST_TELEMETRY);
+        assertThat(node.fetchTo).isEqualTo(TbMsgSource.DATA);
     }
 
     @Test
-    public void assetsCustomerAttributesFetched() {
-        AssetId assetId = new AssetId(Uuids.timeBased());
-        CustomerId customerId = new CustomerId(Uuids.timeBased());
-        Asset asset = new Asset();
-        asset.setCustomerId(customerId);
+    public void givenEmptyAttributesMapping_whenInit_thenException() {
+        // GIVEN
+        var expectedExceptionMessage = "At least one mapping entry should be specified!";
 
-        msg = TbMsg.newMsg( "USER", assetId, new TbMsgMetaData(), TbMsgDataType.JSON, "{}", ruleChainId, ruleNodeId);
+        config.setDataMapping(Collections.emptyMap());
+        nodeConfiguration = new TbNodeConfiguration(JacksonUtil.valueToTree(config));
 
-        when(ctx.getAssetService()).thenReturn(assetService);
-        when(assetService.findAssetByIdAsync(any(), eq(assetId))).thenReturn(Futures.immediateFuture(asset));
+        // WHEN
+        var exception = assertThrows(TbNodeException.class, () -> node.init(ctxMock, nodeConfiguration));
 
-        entityAttributeFetched(customerId);
+        // THEN
+        assertThat(exception.getMessage()).isEqualTo(expectedExceptionMessage);
+        verify(ctxMock, never()).tellSuccess(any());
     }
 
     @Test
-    public void deviceCustomerAttributesFetched() {
-        DeviceId deviceId = new DeviceId(Uuids.timeBased());
-        CustomerId customerId = new CustomerId(Uuids.timeBased());
-        Device device = new Device();
-        device.setCustomerId(customerId);
+    public void givenMsgDataIsNotAnJsonObjectAndFetchToData_whenOnMsg_thenException() {
+        // GIVEN
+        node.fetchTo = TbMsgSource.DATA;
+        msg = TbMsg.newMsg()
+                .type(TbMsgType.POST_TELEMETRY_REQUEST)
+                .originator(DUMMY_DEVICE_ORIGINATOR)
+                .copyMetaData(TbMsgMetaData.EMPTY)
+                .data(TbMsg.EMPTY_JSON_ARRAY)
+                .build();
 
-        msg = TbMsg.newMsg( "USER", deviceId, new TbMsgMetaData(), TbMsgDataType.JSON, "{}", ruleChainId, ruleNodeId);
+        // WHEN
+        var exception = assertThrows(IllegalArgumentException.class, () -> node.onMsg(ctxMock, msg));
 
-        when(ctx.getDeviceService()).thenReturn(deviceService);
-        when(deviceService.findDeviceByIdAsync(any(), eq(deviceId))).thenReturn(Futures.immediateFuture(device));
-
-        entityAttributeFetched(customerId);
+        // THEN
+        assertThat(exception.getMessage()).isEqualTo("Message body is not an object!");
+        verify(ctxMock, never()).tellSuccess(any());
     }
 
     @Test
-    public void deviceCustomerTelemetryFetched() throws TbNodeException {
-        TbGetEntityAttrNodeConfiguration config = new TbGetEntityAttrNodeConfiguration();
-        Map<String, String> attrMapping = new HashMap<>();
-        attrMapping.putIfAbsent("temperature", "tempo");
-        config.setAttrMapping(attrMapping);
-        config.setTelemetry(true);
-        ObjectMapper mapper = new ObjectMapper();
-        TbNodeConfiguration nodeConfiguration = new TbNodeConfiguration(mapper.valueToTree(config));
+    public void givenDidNotFindEntity_whenOnMsg_thenShouldTellFailure() {
+        // GIVEN
+        var userId = new UserId(UUID.randomUUID());
 
-        node = new TbGetCustomerAttributeNode();
-        node.init(null, nodeConfiguration);
+        msg = TbMsg.newMsg()
+                .type(TbMsgType.POST_TELEMETRY_REQUEST)
+                .originator(userId)
+                .copyMetaData(TbMsgMetaData.EMPTY)
+                .data(TbMsg.EMPTY_JSON_OBJECT)
+                .build();
 
+        when(ctxMock.getTenantId()).thenReturn(TENANT_ID);
 
-        DeviceId deviceId = new DeviceId(Uuids.timeBased());
-        CustomerId customerId = new CustomerId(Uuids.timeBased());
-        Device device = new Device();
-        device.setCustomerId(customerId);
+        when(ctxMock.getUserService()).thenReturn(userServiceMock);
+        doReturn(Futures.immediateFuture(null)).when(userServiceMock).findUserByIdAsync(eq(TENANT_ID), eq(userId));
 
-        msg = TbMsg.newMsg( "USER", deviceId, new TbMsgMetaData(), TbMsgDataType.JSON,"{}", ruleChainId, ruleNodeId);
+        when(ctxMock.getDbCallbackExecutor()).thenReturn(DB_EXECUTOR);
 
-        when(ctx.getDeviceService()).thenReturn(deviceService);
-        when(deviceService.findDeviceByIdAsync(any(), eq(deviceId))).thenReturn(Futures.immediateFuture(device));
+        // WHEN
+        node.onMsg(ctxMock, msg);
 
-        List<TsKvEntry> timeseries = Lists.newArrayList(new BasicTsKvEntry(1L, new StringDataEntry("temperature", "highest")));
+        // THEN
+        var actualMessageCaptor = ArgumentCaptor.forClass(TbMsg.class);
+        var actualExceptionCaptor = ArgumentCaptor.forClass(Throwable.class);
 
-        when(ctx.getTimeseriesService()).thenReturn(timeseriesService);
-        when(timeseriesService.findLatest(any(), eq(customerId), eq(Collections.singleton("temperature"))))
-                .thenReturn(Futures.immediateFuture(timeseries));
+        verify(ctxMock, never()).tellSuccess(any());
+        verify(ctxMock, times(1))
+                .tellFailure(actualMessageCaptor.capture(), actualExceptionCaptor.capture());
 
-        node.onMsg(ctx, msg);
-        verify(ctx).tellSuccess(msg);
-        assertEquals(msg.getMetaData().getValue("tempo"), "highest");
+        var actualMessage = actualMessageCaptor.getValue();
+        var actualException = actualExceptionCaptor.getValue();
+
+        var expectedExceptionMessage = String.format(
+                "Failed to find customer for entity with id: %s and type: %s",
+                userId.getId(), userId.getEntityType().getNormalName());
+
+        assertEquals(msg, actualMessage);
+        assertEquals(expectedExceptionMessage, actualException.getMessage());
+        assertInstanceOf(NoSuchElementException.class, actualException);
     }
 
-    private void entityAttributeFetched(CustomerId customerId) {
-        List<AttributeKvEntry> attributes = Lists.newArrayList(new BaseAttributeKvEntry(new StringDataEntry("temperature", "high"), 1L));
+    @Test
+    public void givenFetchAttributesToData_whenOnMsg_thenShouldFetchAttributesToData() {
+        // GIVEN
+        var device = new Device(new DeviceId(UUID.randomUUID()));
+        device.setCustomerId(CUSTOMER_ID);
 
-        when(ctx.getAttributesService()).thenReturn(attributesService);
-        when(attributesService.find(any(), eq(customerId), eq(SERVER_SCOPE), eq(Collections.singleton("temperature"))))
-                .thenReturn(Futures.immediateFuture(attributes));
+        prepareMsgAndConfig(TbMsgSource.DATA, DataToFetch.ATTRIBUTES, device.getId());
 
-        node.onMsg(ctx, msg);
-        verify(ctx).tellSuccess(msg);
-        assertEquals(msg.getMetaData().getValue("tempo"), "high");
+        List<AttributeKvEntry> attributesList = List.of(
+                new BaseAttributeKvEntry(new StringDataEntry("sourceKey1", "sourceValue1"), 1L),
+                new BaseAttributeKvEntry(new StringDataEntry("sourceKey2", "sourceValue2"), 2L),
+                new BaseAttributeKvEntry(new StringDataEntry("sourceKey3", "sourceValue3"), 3L)
+        );
+        var expectedPatternProcessedKeysList = List.of("sourceKey1", "sourceKey2", "sourceKey3");
+
+        when(ctxMock.getTenantId()).thenReturn(TENANT_ID);
+
+        when(ctxMock.getDeviceService()).thenReturn(deviceServiceMock);
+        doReturn(device).when(deviceServiceMock).findDeviceById(eq(TENANT_ID), eq(device.getId()));
+
+        when(ctxMock.getAttributesService()).thenReturn(attributesServiceMock);
+        when(attributesServiceMock.find(eq(TENANT_ID), eq(CUSTOMER_ID), eq(AttributeScope.SERVER_SCOPE), argThat(new ListMatcher<>(expectedPatternProcessedKeysList))))
+                .thenReturn(Futures.immediateFuture(attributesList));
+
+        when(ctxMock.getDbCallbackExecutor()).thenReturn(DB_EXECUTOR);
+
+        // WHEN
+        node.onMsg(ctxMock, msg);
+
+        // THEN
+        var actualMessageCaptor = ArgumentCaptor.forClass(TbMsg.class);
+
+        verify(ctxMock, times(1)).tellSuccess(actualMessageCaptor.capture());
+        verify(ctxMock, never()).tellFailure(any(), any());
+
+        var expectedMsgData = "{\"temp\":42," +
+                "\"humidity\":77," +
+                "\"messageBodyPattern1\":\"targetKey2\"," +
+                "\"messageBodyPattern2\":\"sourceKey3\"," +
+                "\"targetKey1\":\"sourceValue1\"," +
+                "\"targetKey2\":\"sourceValue2\"," +
+                "\"targetKey3\":\"sourceValue3\"}";
+
+        assertThat(actualMessageCaptor.getValue().getData()).isEqualTo(expectedMsgData);
+        assertThat(actualMessageCaptor.getValue().getMetaData()).isEqualTo(msg.getMetaData());
     }
+
+    @Test
+    public void givenFetchAttributesToMetaData_whenOnMsg_thenShouldFetchAttributesToMetaData() {
+        // GIVEN
+        var user = new User(new UserId(UUID.randomUUID()));
+        user.setCustomerId(CUSTOMER_ID);
+
+        prepareMsgAndConfig(TbMsgSource.METADATA, DataToFetch.ATTRIBUTES, user.getId());
+
+        List<AttributeKvEntry> attributesList = List.of(
+                new BaseAttributeKvEntry(new StringDataEntry("sourceKey1", "sourceValue1"), 1L),
+                new BaseAttributeKvEntry(new StringDataEntry("sourceKey2", "sourceValue2"), 2L),
+                new BaseAttributeKvEntry(new StringDataEntry("sourceKey3", "sourceValue3"), 3L)
+        );
+        var expectedPatternProcessedKeysList = List.of("sourceKey1", "sourceKey2", "sourceKey3");
+
+        when(ctxMock.getTenantId()).thenReturn(TENANT_ID);
+
+        when(ctxMock.getUserService()).thenReturn(userServiceMock);
+        doReturn(Futures.immediateFuture(user)).when(userServiceMock).findUserByIdAsync(eq(TENANT_ID), eq(user.getId()));
+
+        when(ctxMock.getAttributesService()).thenReturn(attributesServiceMock);
+        when(attributesServiceMock.find(eq(TENANT_ID), eq(CUSTOMER_ID), eq(AttributeScope.SERVER_SCOPE), argThat(new ListMatcher<>(expectedPatternProcessedKeysList))))
+                .thenReturn(Futures.immediateFuture(attributesList));
+
+        when(ctxMock.getDbCallbackExecutor()).thenReturn(DB_EXECUTOR);
+
+        // WHEN
+        node.onMsg(ctxMock, msg);
+
+        // THEN
+        var actualMessageCaptor = ArgumentCaptor.forClass(TbMsg.class);
+
+        verify(ctxMock, times(1)).tellSuccess(actualMessageCaptor.capture());
+        verify(ctxMock, never()).tellFailure(any(), any());
+
+        var expectedMsgMetaData = new TbMsgMetaData(Map.of(
+                "metaDataPattern1", "sourceKey2",
+                "metaDataPattern2", "targetKey3",
+                "targetKey1", "sourceValue1",
+                "targetKey2", "sourceValue2",
+                "targetKey3", "sourceValue3"
+        ));
+
+        assertThat(actualMessageCaptor.getValue().getData()).isEqualTo(msg.getData());
+        assertThat(actualMessageCaptor.getValue().getMetaData()).isEqualTo(expectedMsgMetaData);
+    }
+
+    @Test
+    public void givenFetchTelemetryToData_whenOnMsg_thenShouldFetchTelemetryToData() {
+        // GIVEN
+        var customer = new Customer(new CustomerId(UUID.randomUUID()));
+
+        prepareMsgAndConfig(TbMsgSource.DATA, DataToFetch.LATEST_TELEMETRY, customer.getId());
+
+        List<TsKvEntry> timeseriesList = List.of(
+                new BasicTsKvEntry(1L, new StringDataEntry("sourceKey1", "sourceValue1")),
+                new BasicTsKvEntry(1L, new StringDataEntry("sourceKey2", "sourceValue2")),
+                new BasicTsKvEntry(1L, new StringDataEntry("sourceKey3", "sourceValue3"))
+        );
+        var expectedPatternProcessedKeysList = List.of("sourceKey1", "sourceKey2", "sourceKey3");
+
+        when(ctxMock.getTenantId()).thenReturn(TENANT_ID);
+
+        when(ctxMock.getTimeseriesService()).thenReturn(timeseriesServiceMock);
+        when(timeseriesServiceMock.findLatest(eq(TENANT_ID), eq(customer.getId()), argThat(new ListMatcher<>(expectedPatternProcessedKeysList))))
+                .thenReturn(Futures.immediateFuture(timeseriesList));
+
+        when(ctxMock.getDbCallbackExecutor()).thenReturn(DB_EXECUTOR);
+
+        // WHEN
+        node.onMsg(ctxMock, msg);
+
+        // THEN
+        var actualMessageCaptor = ArgumentCaptor.forClass(TbMsg.class);
+
+        verify(ctxMock, times(1)).tellSuccess(actualMessageCaptor.capture());
+        verify(ctxMock, never()).tellFailure(any(), any());
+
+        var expectedMsgData = "{\"temp\":42," +
+                "\"humidity\":77," +
+                "\"messageBodyPattern1\":\"targetKey2\"," +
+                "\"messageBodyPattern2\":\"sourceKey3\"," +
+                "\"targetKey1\":\"sourceValue1\"," +
+                "\"targetKey2\":\"sourceValue2\"," +
+                "\"targetKey3\":\"sourceValue3\"}";
+
+        assertThat(actualMessageCaptor.getValue().getData()).isEqualTo(expectedMsgData);
+        assertThat(actualMessageCaptor.getValue().getMetaData()).isEqualTo(msg.getMetaData());
+    }
+
+    @Test
+    public void givenFetchTelemetryToMetaData_whenOnMsg_thenShouldFetchTelemetryToMetaData() {
+        // GIVEN
+        var asset = new Asset(new AssetId(UUID.randomUUID()));
+        asset.setCustomerId(new CustomerId(UUID.randomUUID()));
+
+        prepareMsgAndConfig(TbMsgSource.METADATA, DataToFetch.LATEST_TELEMETRY, asset.getId());
+
+        List<TsKvEntry> timeseriesList = List.of(
+                new BasicTsKvEntry(1L, new StringDataEntry("sourceKey1", "sourceValue1")),
+                new BasicTsKvEntry(1L, new StringDataEntry("sourceKey2", "sourceValue2")),
+                new BasicTsKvEntry(1L, new StringDataEntry("sourceKey3", "sourceValue3"))
+        );
+        var expectedPatternProcessedKeysList = List.of("sourceKey1", "sourceKey2", "sourceKey3");
+
+        when(ctxMock.getTenantId()).thenReturn(TENANT_ID);
+
+        when(ctxMock.getAssetService()).thenReturn(assetServiceMock);
+        doReturn(Futures.immediateFuture(asset)).when(assetServiceMock).findAssetByIdAsync(eq(TENANT_ID), eq(asset.getId()));
+
+        when(ctxMock.getTimeseriesService()).thenReturn(timeseriesServiceMock);
+        when(timeseriesServiceMock.findLatest(eq(TENANT_ID), eq(asset.getCustomerId()), argThat(new ListMatcher<>(expectedPatternProcessedKeysList))))
+                .thenReturn(Futures.immediateFuture(timeseriesList));
+
+        when(ctxMock.getDbCallbackExecutor()).thenReturn(DB_EXECUTOR);
+
+        // WHEN
+        node.onMsg(ctxMock, msg);
+
+        // THEN
+        var actualMessageCaptor = ArgumentCaptor.forClass(TbMsg.class);
+
+        verify(ctxMock, times(1)).tellSuccess(actualMessageCaptor.capture());
+        verify(ctxMock, never()).tellFailure(any(), any());
+
+        var expectedMsgMetaData = new TbMsgMetaData(Map.of(
+                "metaDataPattern1", "sourceKey2",
+                "metaDataPattern2", "targetKey3",
+                "targetKey1", "sourceValue1",
+                "targetKey2", "sourceValue2",
+                "targetKey3", "sourceValue3"
+        ));
+
+        assertThat(actualMessageCaptor.getValue().getData()).isEqualTo(msg.getData());
+        assertThat(actualMessageCaptor.getValue().getMetaData()).isEqualTo(expectedMsgMetaData);
+    }
+
+    @Test
+    public void givenOldConfig_whenUpgrade_thenShouldReturnTrueResultWithNewConfig() throws Exception {
+        var defaultConfig = new TbGetEntityDataNodeConfiguration().defaultConfiguration();
+        var node = new TbGetCustomerAttributeNode();
+        String oldConfig = "{\"attrMapping\":{\"alarmThreshold\":\"threshold\"},\"telemetry\":false}";
+        JsonNode configJson = JacksonUtil.toJsonNode(oldConfig);
+        TbPair<Boolean, JsonNode> upgrade = node.upgrade(0, configJson);
+        Assertions.assertTrue(upgrade.getFirst());
+        Assertions.assertEquals(defaultConfig, JacksonUtil.treeToValue(upgrade.getSecond(), defaultConfig.getClass()));
+    }
+
+    private void prepareMsgAndConfig(TbMsgSource fetchTo, DataToFetch dataToFetch, EntityId originator) {
+        config.setDataMapping(Map.of(
+                "sourceKey1", "targetKey1",
+                "${metaDataPattern1}", "$[messageBodyPattern1]",
+                "$[messageBodyPattern2]", "${metaDataPattern2}"));
+        config.setDataToFetch(dataToFetch);
+        config.setFetchTo(fetchTo);
+
+        node.config = config;
+        node.fetchTo = fetchTo;
+
+        var msgMetaData = new TbMsgMetaData();
+        msgMetaData.putValue("metaDataPattern1", "sourceKey2");
+        msgMetaData.putValue("metaDataPattern2", "targetKey3");
+
+        var msgData = "{\"temp\":42,\"humidity\":77,\"messageBodyPattern1\":\"targetKey2\",\"messageBodyPattern2\":\"sourceKey3\"}";
+
+        msg = TbMsg.newMsg()
+                .type(TbMsgType.POST_TELEMETRY_REQUEST)
+                .originator(originator)
+                .copyMetaData(msgMetaData)
+                .data(msgData)
+                .build();
+    }
+
+    @RequiredArgsConstructor
+    private static class ListMatcher<T> implements ArgumentMatcher<List<T>> {
+
+        private final List<T> expectedList;
+
+        @Override
+        public boolean matches(List<T> actualList) {
+            if (actualList == expectedList) {
+                return true;
+            }
+            if (actualList.size() != expectedList.size()) {
+                return false;
+            }
+            return actualList.containsAll(expectedList);
+        }
+
+    }
+
 }

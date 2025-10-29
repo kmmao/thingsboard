@@ -1,5 +1,5 @@
 /**
- * Copyright © 2016-2021 The Thingsboard Authors
+ * Copyright © 2016-2025 The Thingsboard Authors
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -15,67 +15,72 @@
  */
 package org.thingsboard.server.config;
 
-import org.springframework.beans.factory.annotation.Autowired;
-import org.springframework.beans.factory.annotation.Value;
+import jakarta.servlet.FilterChain;
+import jakarta.servlet.ServletException;
+import jakarta.servlet.http.HttpServletRequest;
+import jakarta.servlet.http.HttpServletResponse;
+import lombok.RequiredArgsConstructor;
+import lombok.extern.slf4j.Slf4j;
+import org.springframework.security.authentication.BadCredentialsException;
 import org.springframework.security.core.Authentication;
 import org.springframework.security.core.context.SecurityContextHolder;
 import org.springframework.stereotype.Component;
-import org.springframework.web.filter.GenericFilterBean;
+import org.springframework.web.filter.OncePerRequestFilter;
+import org.thingsboard.server.cache.limits.RateLimitService;
 import org.thingsboard.server.common.data.EntityType;
-import org.thingsboard.server.common.data.id.CustomerId;
-import org.thingsboard.server.common.data.id.TenantId;
-import org.thingsboard.server.common.msg.tools.TbRateLimits;
+import org.thingsboard.server.common.data.exception.TenantProfileNotFoundException;
+import org.thingsboard.server.common.data.limit.LimitedApi;
 import org.thingsboard.server.common.msg.tools.TbRateLimitsException;
 import org.thingsboard.server.exception.ThingsboardErrorResponseHandler;
 import org.thingsboard.server.service.security.model.SecurityUser;
 
-import javax.servlet.FilterChain;
-import javax.servlet.ServletException;
-import javax.servlet.ServletRequest;
-import javax.servlet.ServletResponse;
-import javax.servlet.http.HttpServletResponse;
 import java.io.IOException;
-import java.util.concurrent.ConcurrentHashMap;
-import java.util.concurrent.ConcurrentMap;
 
+@Slf4j
 @Component
-public class RateLimitProcessingFilter extends GenericFilterBean {
+@RequiredArgsConstructor
+public class RateLimitProcessingFilter extends OncePerRequestFilter {
 
-    @Value("${server.rest.limits.tenant.enabled:false}")
-    private boolean perTenantLimitsEnabled;
-    @Value("${server.rest.limits.tenant.configuration:}")
-    private String perTenantLimitsConfiguration;
-    @Value("${server.rest.limits.customer.enabled:false}")
-    private boolean perCustomerLimitsEnabled;
-    @Value("${server.rest.limits.customer.configuration:}")
-    private String perCustomerLimitsConfiguration;
-
-    @Autowired
-    private ThingsboardErrorResponseHandler errorResponseHandler;
-
-    private ConcurrentMap<TenantId, TbRateLimits> perTenantLimits = new ConcurrentHashMap<>();
-    private ConcurrentMap<CustomerId, TbRateLimits> perCustomerLimits = new ConcurrentHashMap<>();
+    private final ThingsboardErrorResponseHandler errorResponseHandler;
+    private final RateLimitService rateLimitService;
 
     @Override
-    public void doFilter(ServletRequest request, ServletResponse response, FilterChain chain) throws IOException, ServletException {
+    public void doFilterInternal(HttpServletRequest request, HttpServletResponse response, FilterChain chain) throws IOException, ServletException {
         SecurityUser user = getCurrentUser();
         if (user != null && !user.isSystemAdmin()) {
-            if (perTenantLimitsEnabled) {
-                TbRateLimits rateLimits = perTenantLimits.computeIfAbsent(user.getTenantId(), id -> new TbRateLimits(perTenantLimitsConfiguration));
-                if (!rateLimits.tryConsume()) {
-                    errorResponseHandler.handle(new TbRateLimitsException(EntityType.TENANT), (HttpServletResponse) response);
+            try {
+                if (!rateLimitService.checkRateLimit(LimitedApi.REST_REQUESTS_PER_TENANT, user.getTenantId())) {
+                    rateLimitExceeded(EntityType.TENANT, response);
                     return;
                 }
+            } catch (TenantProfileNotFoundException e) {
+                log.debug("[{}] Failed to lookup tenant profile", user.getTenantId());
+                errorResponseHandler.handle(new BadCredentialsException("Failed to lookup tenant profile"), response);
+                return;
             }
-            if (perCustomerLimitsEnabled && user.isCustomerUser()) {
-                TbRateLimits rateLimits = perCustomerLimits.computeIfAbsent(user.getCustomerId(), id -> new TbRateLimits(perCustomerLimitsConfiguration));
-                if (!rateLimits.tryConsume()) {
-                    errorResponseHandler.handle(new TbRateLimitsException(EntityType.CUSTOMER), (HttpServletResponse) response);
+
+            if (user.isCustomerUser()) {
+                if (!rateLimitService.checkRateLimit(LimitedApi.REST_REQUESTS_PER_CUSTOMER, user.getTenantId(), user.getCustomerId())) {
+                    rateLimitExceeded(EntityType.CUSTOMER, response);
                     return;
                 }
             }
         }
         chain.doFilter(request, response);
+    }
+
+    @Override
+    protected boolean shouldNotFilterAsyncDispatch() {
+        return false;
+    }
+
+    @Override
+    protected boolean shouldNotFilterErrorDispatch() {
+        return false;
+    }
+
+    private void rateLimitExceeded(EntityType type, HttpServletResponse response) {
+        errorResponseHandler.handle(new TbRateLimitsException(type), response);
     }
 
     protected SecurityUser getCurrentUser() {

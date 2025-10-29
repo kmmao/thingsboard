@@ -1,5 +1,5 @@
 ///
-/// Copyright © 2016-2021 The Thingsboard Authors
+/// Copyright © 2016-2025 The Thingsboard Authors
 ///
 /// Licensed under the Apache License, Version 2.0 (the "License");
 /// you may not use this file except in compliance with the License.
@@ -14,14 +14,14 @@
 /// limitations under the License.
 ///
 
-import { Component, forwardRef, Input, OnInit } from '@angular/core';
+import { Component, DestroyRef, forwardRef, Input, OnInit } from '@angular/core';
 import {
   AbstractControl,
   ControlValueAccessor,
-  FormArray,
-  FormBuilder,
-  FormControl,
-  FormGroup,
+  UntypedFormArray,
+  UntypedFormBuilder,
+  UntypedFormControl,
+  UntypedFormGroup,
   NG_VALIDATORS,
   NG_VALUE_ACCESSOR,
   ValidationErrors,
@@ -40,6 +40,7 @@ import {
 import { isDefined, isDefinedAndNotNull } from '@core/utils';
 import { MatCheckboxChange } from '@angular/material/checkbox';
 import { getDefaultTimezone } from '@shared/models/time/time.models';
+import { takeUntilDestroyed } from '@angular/core/rxjs-interop';
 
 @Component({
   selector: 'tb-alarm-schedule',
@@ -59,12 +60,11 @@ export class AlarmScheduleComponent implements ControlValueAccessor, Validator, 
   @Input()
   disabled: boolean;
 
-  alarmScheduleForm: FormGroup;
+  alarmScheduleForm: UntypedFormGroup;
 
   alarmScheduleTypes = Object.keys(AlarmScheduleType);
   alarmScheduleType = AlarmScheduleType;
   alarmScheduleTypeTranslate = AlarmScheduleTypeTranslationMap;
-
   dayOfWeekTranslationsArray = dayOfWeekTranslations;
 
   allDays = Array(7).fill(0).map((x, i) => i);
@@ -81,7 +81,8 @@ export class AlarmScheduleComponent implements ControlValueAccessor, Validator, 
 
   private propagateChange = (v: any) => { };
 
-  constructor(private fb: FormBuilder) {
+  constructor(private fb: UntypedFormBuilder,
+              private destroyRef: DestroyRef) {
   }
 
   ngOnInit(): void {
@@ -91,15 +92,21 @@ export class AlarmScheduleComponent implements ControlValueAccessor, Validator, 
       daysOfWeek: this.fb.array(new Array(7).fill(false), this.validateDayOfWeeks),
       startsOn: [0, Validators.required],
       endsOn: [0, Validators.required],
-      items: this.fb.array(Array.from({length: 7}, (value, i) => this.defaultItemsScheduler(i)), this.validateItems)
+      items: this.fb.array(Array.from({length: 7}, (value, i) => this.defaultItemsScheduler(i)), this.validateItems),
+      dynamicValue: [null]
     });
-    this.alarmScheduleForm.get('type').valueChanges.subscribe((type) => {
+
+    this.alarmScheduleForm.get('type').valueChanges.pipe(
+      takeUntilDestroyed(this.destroyRef)
+    ).subscribe((type) => {
       const defaultTimezone = getDefaultTimezone();
       this.alarmScheduleForm.reset({type, items: this.defaultItems, timezone: defaultTimezone}, {emitEvent: false});
       this.updateValidators(type, true);
       this.alarmScheduleForm.updateValueAndValidity();
     });
-    this.alarmScheduleForm.valueChanges.subscribe(() => {
+    this.alarmScheduleForm.valueChanges.pipe(
+      takeUntilDestroyed(this.destroyRef)
+    ).subscribe(() => {
       this.updateModel();
     });
   }
@@ -136,7 +143,7 @@ export class AlarmScheduleComponent implements ControlValueAccessor, Validator, 
     if (this.disabled) {
       this.alarmScheduleForm.disable({emitEvent: false});
     } else {
-      this.alarmScheduleForm.enable({emitEvent: false});
+      this.updateValidators(this.alarmScheduleForm.get('type').value);
     }
   }
 
@@ -158,7 +165,8 @@ export class AlarmScheduleComponent implements ControlValueAccessor, Validator, 
           timezone: this.modelValue.timezone,
           daysOfWeek,
           startsOn: utcTimestampToTimeOfDay(this.modelValue.startsOn),
-          endsOn: utcTimestampToTimeOfDay(this.modelValue.endsOn)
+          endsOn: utcTimestampToTimeOfDay(this.modelValue.endsOn),
+          dynamicValue: this.modelValue.dynamicValue
         }, {emitEvent: false});
         break;
       case AlarmScheduleType.CUSTOM:
@@ -177,7 +185,8 @@ export class AlarmScheduleComponent implements ControlValueAccessor, Validator, 
           this.alarmScheduleForm.patchValue({
             type: this.modelValue.type,
             timezone: this.modelValue.timezone,
-            items: alarmDays
+            items: alarmDays,
+            dynamicValue: this.modelValue.dynamicValue
           }, {emitEvent: false});
         }
         break;
@@ -187,7 +196,7 @@ export class AlarmScheduleComponent implements ControlValueAccessor, Validator, 
     this.updateValidators(this.modelValue.type);
   }
 
-  validate(control: FormGroup): ValidationErrors | null {
+  validate(control: UntypedFormGroup): ValidationErrors | null {
     return this.alarmScheduleForm.valid ? null : {
       alarmScheduler: {
         valid: false
@@ -195,8 +204,8 @@ export class AlarmScheduleComponent implements ControlValueAccessor, Validator, 
     };
   }
 
-  weeklyRepeatControl(index: number): FormControl {
-    return (this.alarmScheduleForm.get('daysOfWeek') as FormArray).at(index) as FormControl;
+  weeklyRepeatControl(index: number): UntypedFormControl {
+    return (this.alarmScheduleForm.get('daysOfWeek') as UntypedFormArray).at(index) as UntypedFormControl;
   }
 
   private updateValidators(type: AlarmScheduleType, changedType = false){
@@ -253,7 +262,7 @@ export class AlarmScheduleComponent implements ControlValueAccessor, Validator, 
   }
 
 
-  private defaultItemsScheduler(index): FormGroup {
+  private defaultItemsScheduler(index): UntypedFormGroup {
     return this.fb.group({
       enabled: [true],
       dayOfWeek: [index + 1],
@@ -277,11 +286,11 @@ export class AlarmScheduleComponent implements ControlValueAccessor, Validator, 
     }
   }
 
-  getSchedulerRangeText(control: FormGroup | AbstractControl): string {
+  getSchedulerRangeText(control: UntypedFormGroup | AbstractControl): string {
     return getAlarmScheduleRangeText(control.get('startsOn').value, control.get('endsOn').value);
   }
 
-  get itemsSchedulerForm(): FormArray {
-    return this.alarmScheduleForm.get('items') as FormArray;
+  get itemsSchedulerForm(): UntypedFormArray {
+    return this.alarmScheduleForm.get('items') as UntypedFormArray;
   }
 }

@@ -1,5 +1,5 @@
 /**
- * Copyright © 2016-2021 The Thingsboard Authors
+ * Copyright © 2016-2025 The Thingsboard Authors
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -13,6 +13,43 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
-:host {
+@import "../../../../../scss/constants";
 
+:host {
+  .fields-group {
+    padding: 0 8px 8px;
+    margin: 10px 0;
+    border: 1px groove rgba(0, 0, 0, .25);
+    border-radius: 4px;
+    legend {
+      margin-bottom: 8px;
+      color: rgba(0, 0, 0, .7);
+      width: fit-content;
+    }
+  }
+
+  .token-status {
+    font: 400 14px / 16px Roboto, "Helvetica Neue", sans-serif;
+    color: rgba(0,0,0, 0.6);
+    letter-spacing: 0.25px;
+    padding: 8px 0;
+  }
+
+  ::ng-deep{
+    .mat-expansion-panel {
+      .mat-expansion-panel-header {
+        height: 48px;
+        padding: 0 12px;
+        &.mat-expanded {
+          height: 48px;
+        }
+      }
+      .mat-expansion-panel-body {
+        padding: 0 12px;
+      }
+      &.configuration-panel {
+        border: 1px solid rgba(0, 0, 0, 0.2);
+      }
+    }
+  }
 }

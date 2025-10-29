@@ -1,5 +1,5 @@
 ///
-/// Copyright © 2016-2021 The Thingsboard Authors
+/// Copyright © 2016-2025 The Thingsboard Authors
 ///
 /// Licensed under the Apache License, Version 2.0 (the "License");
 /// you may not use this file except in compliance with the License.
@@ -14,7 +14,7 @@
 /// limitations under the License.
 ///
 
-import { Component, Inject, OnInit, SkipSelf, ViewChild } from '@angular/core';
+import { Component, DestroyRef, Inject, OnInit, SkipSelf, ViewChild } from '@angular/core';
 import { ErrorStateMatcher } from '@angular/material/core';
 import { MAT_DIALOG_DATA, MatDialogRef } from '@angular/material/dialog';
 import { Store } from '@ngrx/store';
@@ -32,6 +32,10 @@ import { forkJoin, Observable } from 'rxjs';
 import { JsonObjectEditComponent } from '@shared/components/json-object-edit.component';
 import { Router } from '@angular/router';
 import { DialogComponent } from '@shared/components/dialog.component';
+import { takeUntilDestroyed } from '@angular/core/rxjs-interop';
+import { getCurrentAuthUser } from '@core/auth/auth.selectors';
+import { Authority } from '@shared/models/authority.enum';
+import { EntityType } from '@shared/models/entity-type.models';
 
 export interface RelationDialogData {
   isAdd: boolean;
@@ -49,6 +53,8 @@ export class RelationDialogComponent extends DialogComponent<RelationDialogCompo
 
   relationFormGroup: FormGroup;
 
+  additionEntityTypes: {[key in string]: string} = {};
+
   isAdd: boolean;
   direction: EntitySearchDirection;
   entitySearchDirection = EntitySearchDirection;
@@ -59,19 +65,26 @@ export class RelationDialogComponent extends DialogComponent<RelationDialogCompo
 
   submitted = false;
 
+  private authUser = getCurrentAuthUser(this.store);
+
   constructor(protected store: Store<AppState>,
               protected router: Router,
               @Inject(MAT_DIALOG_DATA) public data: RelationDialogData,
               private entityRelationService: EntityRelationService,
               @SkipSelf() private errorStateMatcher: ErrorStateMatcher,
               public dialogRef: MatDialogRef<RelationDialogComponent, boolean>,
-              public fb: FormBuilder) {
+              public fb: FormBuilder,
+              private destroyRef: DestroyRef) {
     super(store, router, dialogRef);
     this.isAdd = data.isAdd;
     this.direction = data.direction;
   }
 
   ngOnInit(): void {
+    if (this.authUser.authority === Authority.TENANT_ADMIN) {
+      this.additionEntityTypes = {[EntityType.RULE_CHAIN]: null};
+    }
+
     this.relationFormGroup = this.fb.group({
       type: [this.isAdd ? CONTAINS_TYPE : this.data.relation.type, [Validators.required]],
       targetEntityIds: [this.isAdd ? null :
@@ -83,7 +96,9 @@ export class RelationDialogComponent extends DialogComponent<RelationDialogCompo
       this.relationFormGroup.get('type').disable();
       this.relationFormGroup.get('targetEntityIds').disable();
     }
-    this.additionalInfo.valueChanges.subscribe(
+    this.additionalInfo.valueChanges.pipe(
+      takeUntilDestroyed(this.destroyRef)
+    ).subscribe(
       () => {
         this.submitted = false;
       }

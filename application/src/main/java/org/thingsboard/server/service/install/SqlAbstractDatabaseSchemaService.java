@@ -1,5 +1,5 @@
 /**
- * Copyright © 2016-2021 The Thingsboard Authors
+ * Copyright © 2016-2025 The Thingsboard Authors
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -19,7 +19,7 @@ import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.beans.factory.annotation.Value;
 
-import java.nio.charset.Charset;
+import java.io.IOException;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.nio.file.Paths;
@@ -59,14 +59,8 @@ public abstract class SqlAbstractDatabaseSchemaService implements DatabaseSchema
 
     @Override
     public void createDatabaseSchema(boolean createIndexes) throws Exception {
-
         log.info("Installing SQL DataBase schema part: " + schemaSql);
-
-        Path schemaFile = Paths.get(installScripts.getDataDir(), SQL_DIR, schemaSql);
-        try (Connection conn = DriverManager.getConnection(dbUrl, dbUserName, dbPassword)) {
-            String sql = new String(Files.readAllBytes(schemaFile), Charset.forName("UTF-8"));
-            conn.createStatement().execute(sql); //NOSONAR, ignoring because method used to load initial thingsboard database schema
-        }
+        executeQueryFromFile(schemaSql);
 
         if (createIndexes) {
             this.createDatabaseIndexes();
@@ -77,21 +71,30 @@ public abstract class SqlAbstractDatabaseSchemaService implements DatabaseSchema
     public void createDatabaseIndexes() throws Exception {
         if (schemaIdxSql != null) {
             log.info("Installing SQL DataBase schema indexes part: " + schemaIdxSql);
-            Path schemaIdxFile = Paths.get(installScripts.getDataDir(), SQL_DIR, schemaIdxSql);
-            try (Connection conn = DriverManager.getConnection(dbUrl, dbUserName, dbPassword)) {
-                String sql = new String(Files.readAllBytes(schemaIdxFile), Charset.forName("UTF-8"));
-                conn.createStatement().execute(sql); //NOSONAR, ignoring because method used to load initial thingsboard database schema
-            }
+            executeQueryFromFile(schemaIdxSql);
+        }
+    }
+
+    void executeQueryFromFile(String schemaIdxSql) throws SQLException, IOException {
+        Path schemaIdxFile = Paths.get(installScripts.getDataDir(), SQL_DIR, schemaIdxSql);
+        String sql = Files.readString(schemaIdxFile);
+        try (Connection conn = DriverManager.getConnection(dbUrl, dbUserName, dbPassword)) {
+            conn.createStatement().execute(sql); //NOSONAR, ignoring because method used to load initial thingsboard database schema
         }
     }
 
     protected void executeQuery(String query) {
+        executeQuery(query, null);
+    }
+
+    protected void executeQuery(String query, String logQuery) {
+        logQuery = logQuery != null ? logQuery : query;
         try (Connection conn = DriverManager.getConnection(dbUrl, dbUserName, dbPassword)) {
             conn.createStatement().execute(query); //NOSONAR, ignoring because method used to execute thingsboard database upgrade script
-            log.info("Successfully executed query: {}", query);
+            log.info("Successfully executed query: {}", logQuery);
             Thread.sleep(5000);
         } catch (InterruptedException | SQLException e) {
-            log.info("Failed to execute query: {} due to: {}", query, e.getMessage());
+            throw new RuntimeException("Failed to execute query: " + logQuery, e);
         }
     }
 

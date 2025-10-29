@@ -1,5 +1,5 @@
 /**
- * Copyright © 2016-2021 The Thingsboard Authors
+ * Copyright © 2016-2025 The Thingsboard Authors
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -18,6 +18,7 @@ package org.thingsboard.server.dao.model.sql;
 import com.fasterxml.jackson.databind.JsonNode;
 import lombok.Data;
 import lombok.EqualsAndHashCode;
+import org.thingsboard.server.common.data.asset.Asset;
 import org.thingsboard.server.common.data.asset.AssetInfo;
 
 import java.util.HashMap;
@@ -30,10 +31,12 @@ public class AssetInfoEntity extends AbstractAssetEntity<AssetInfo> {
     public static final Map<String,String> assetInfoColumnMap = new HashMap<>();
     static {
         assetInfoColumnMap.put("customerTitle", "c.title");
+        assetInfoColumnMap.put("assetProfileName", "p.name");
     }
 
     private String customerTitle;
     private boolean customerIsPublic;
+    private String assetProfileName;
 
     public AssetInfoEntity() {
         super();
@@ -41,7 +44,8 @@ public class AssetInfoEntity extends AbstractAssetEntity<AssetInfo> {
 
     public AssetInfoEntity(AssetEntity assetEntity,
                            String customerTitle,
-                           Object customerAdditionalInfo) {
+                           Object customerAdditionalInfo,
+                           String assetProfileName) {
         super(assetEntity);
         this.customerTitle = customerTitle;
         if (customerAdditionalInfo != null && ((JsonNode)customerAdditionalInfo).has("isPublic")) {
@@ -49,10 +53,11 @@ public class AssetInfoEntity extends AbstractAssetEntity<AssetInfo> {
         } else {
             this.customerIsPublic = false;
         }
+        this.assetProfileName = assetProfileName;
     }
 
     @Override
     public AssetInfo toData() {
-        return new AssetInfo(super.toAsset(), customerTitle, customerIsPublic);
+        return new AssetInfo(super.toAsset(), customerTitle, customerIsPublic, assetProfileName);
     }
 }

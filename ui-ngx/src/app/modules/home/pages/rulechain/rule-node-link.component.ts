@@ -1,5 +1,5 @@
 ///
-/// Copyright © 2016-2021 The Thingsboard Authors
+/// Copyright © 2016-2025 The Thingsboard Authors
 ///
 /// Licensed under the Apache License, Version 2.0 (the "License");
 /// you may not use this file except in compliance with the License.
@@ -15,11 +15,12 @@
 ///
 
 import { Component, forwardRef, Input, OnInit } from '@angular/core';
-import { ControlValueAccessor, FormBuilder, FormGroup, NG_VALUE_ACCESSOR, Validators } from '@angular/forms';
+import { ControlValueAccessor, UntypedFormBuilder, UntypedFormGroup, NG_VALUE_ACCESSOR, Validators } from '@angular/forms';
 import { FcRuleEdge, LinkLabel } from '@shared/models/rule-node.models';
 import { coerceBooleanProperty } from '@angular/cdk/coercion';
 import { TruncatePipe } from '@shared/pipe/truncate.pipe';
 import { TranslateService } from '@ngx-translate/core';
+import { takeUntilDestroyed } from '@angular/core/rxjs-interop';
 
 @Component({
   selector: 'tb-rule-node-link',
@@ -57,19 +58,24 @@ export class RuleNodeLinkComponent implements ControlValueAccessor, OnInit {
   @Input()
   allowedLabels: {[label: string]: LinkLabel};
 
-  ruleNodeLinkFormGroup: FormGroup;
+  @Input()
+  sourceRuleChainId: string;
+
+  ruleNodeLinkFormGroup: UntypedFormGroup;
 
   modelValue: FcRuleEdge;
 
   private propagateChange = (v: any) => { };
 
-  constructor(private fb: FormBuilder,
+  constructor(private fb: UntypedFormBuilder,
               public truncate: TruncatePipe,
               public translate: TranslateService) {
     this.ruleNodeLinkFormGroup = this.fb.group({
       labels: [[], Validators.required]
     });
-    this.ruleNodeLinkFormGroup.get('labels').valueChanges.subscribe(
+    this.ruleNodeLinkFormGroup.get('labels').valueChanges.pipe(
+      takeUntilDestroyed()
+    ).subscribe(
       (labels: string[]) => this.updateModel(labels)
     );
   }

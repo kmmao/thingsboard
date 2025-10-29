@@ -1,5 +1,5 @@
 /**
- * Copyright © 2016-2021 The Thingsboard Authors
+ * Copyright © 2016-2025 The Thingsboard Authors
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -15,23 +15,30 @@
  */
 package org.thingsboard.mqtt;
 
+import lombok.AccessLevel;
+import lombok.Getter;
+import lombok.Setter;
+
 import java.util.regex.Pattern;
 
 final class MqttSubscription {
 
+    @Getter(AccessLevel.PACKAGE)
     private final String topic;
     private final Pattern topicRegex;
+    @Getter
     private final MqttHandler handler;
-
+    @Getter(AccessLevel.PACKAGE)
     private final boolean once;
-
-    private boolean called;
+    @Getter(AccessLevel.PACKAGE)
+    @Setter(AccessLevel.PACKAGE)
+    private volatile boolean called;
 
     MqttSubscription(String topic, MqttHandler handler, boolean once) {
-        if(topic == null){
+        if (topic == null) {
             throw new NullPointerException("topic");
         }
-        if(handler == null){
+        if (handler == null) {
             throw new NullPointerException("handler");
         }
         this.topic = topic;
@@ -40,23 +47,7 @@ final class MqttSubscription {
         this.topicRegex = Pattern.compile(topic.replace("+", "[^/]+").replace("#", ".+") + "$");
     }
 
-    String getTopic() {
-        return topic;
-    }
-
-    public MqttHandler getHandler() {
-        return handler;
-    }
-
-    boolean isOnce() {
-        return once;
-    }
-
-    boolean isCalled() {
-        return called;
-    }
-
-    boolean matches(String topic){
+    boolean matches(String topic) {
         return this.topicRegex.matcher(topic).matches();
     }
 
@@ -78,7 +69,4 @@ final class MqttSubscription {
         return result;
     }
 
-    void setCalled(boolean called) {
-        this.called = called;
-    }
 }

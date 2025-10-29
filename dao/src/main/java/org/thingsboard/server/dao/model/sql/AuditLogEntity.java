@@ -1,5 +1,5 @@
 /**
- * Copyright © 2016-2021 The Thingsboard Authors
+ * Copyright © 2016-2025 The Thingsboard Authors
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -16,10 +16,14 @@
 package org.thingsboard.server.dao.model.sql;
 
 import com.fasterxml.jackson.databind.JsonNode;
+import jakarta.persistence.Column;
+import jakarta.persistence.Convert;
+import jakarta.persistence.Entity;
+import jakarta.persistence.EnumType;
+import jakarta.persistence.Enumerated;
+import jakarta.persistence.Table;
 import lombok.Data;
 import lombok.EqualsAndHashCode;
-import org.hibernate.annotations.Type;
-import org.hibernate.annotations.TypeDef;
 import org.thingsboard.server.common.data.EntityType;
 import org.thingsboard.server.common.data.audit.ActionStatus;
 import org.thingsboard.server.common.data.audit.ActionType;
@@ -32,13 +36,8 @@ import org.thingsboard.server.common.data.id.UserId;
 import org.thingsboard.server.dao.model.BaseEntity;
 import org.thingsboard.server.dao.model.BaseSqlEntity;
 import org.thingsboard.server.dao.model.ModelConstants;
-import org.thingsboard.server.dao.util.mapping.JsonStringType;
+import org.thingsboard.server.dao.util.mapping.JsonConverter;
 
-import javax.persistence.Column;
-import javax.persistence.Entity;
-import javax.persistence.EnumType;
-import javax.persistence.Enumerated;
-import javax.persistence.Table;
 import java.util.UUID;
 
 import static org.thingsboard.server.dao.model.ModelConstants.AUDIT_LOG_ACTION_DATA_PROPERTY;
@@ -56,8 +55,7 @@ import static org.thingsboard.server.dao.model.ModelConstants.AUDIT_LOG_USER_NAM
 @Data
 @EqualsAndHashCode(callSuper = true)
 @Entity
-@TypeDef(name = "json", typeClass = JsonStringType.class)
-@Table(name = ModelConstants.AUDIT_LOG_COLUMN_FAMILY_NAME)
+@Table(name = ModelConstants.AUDIT_LOG_TABLE_NAME)
 public class AuditLogEntity extends BaseSqlEntity<AuditLog> implements BaseEntity<AuditLog> {
 
     @Column(name = AUDIT_LOG_TENANT_ID_PROPERTY)
@@ -86,7 +84,7 @@ public class AuditLogEntity extends BaseSqlEntity<AuditLog> implements BaseEntit
     @Column(name = AUDIT_LOG_ACTION_TYPE_PROPERTY)
     private ActionType actionType;
 
-    @Type(type = "json")
+    @Convert(converter = JsonConverter.class)
     @Column(name = AUDIT_LOG_ACTION_DATA_PROPERTY)
     private JsonNode actionData;
 
@@ -132,7 +130,7 @@ public class AuditLogEntity extends BaseSqlEntity<AuditLog> implements BaseEntit
         AuditLog auditLog = new AuditLog(new AuditLogId(this.getUuid()));
         auditLog.setCreatedTime(createdTime);
         if (tenantId != null) {
-            auditLog.setTenantId(new TenantId(tenantId));
+            auditLog.setTenantId(TenantId.fromUUID(tenantId));
         }
         if (customerId != null) {
             auditLog.setCustomerId(new CustomerId(customerId));
@@ -151,4 +149,5 @@ public class AuditLogEntity extends BaseSqlEntity<AuditLog> implements BaseEntit
         auditLog.setActionFailureDetails(this.actionFailureDetails);
         return auditLog;
     }
+
 }

@@ -1,5 +1,5 @@
 ///
-/// Copyright © 2016-2021 The Thingsboard Authors
+/// Copyright © 2016-2025 The Thingsboard Authors
 ///
 /// Licensed under the Apache License, Version 2.0 (the "License");
 /// you may not use this file except in compliance with the License.
@@ -20,20 +20,21 @@ import {
   EventEmitter,
   forwardRef,
   Input,
-  NgZone, OnChanges,
+  NgZone,
+  OnChanges,
   OnInit,
-  Output, SimpleChanges,
+  Output,
+  SimpleChanges,
   ViewChild
 } from '@angular/core';
-import { ControlValueAccessor, FormBuilder, FormGroup, NG_VALUE_ACCESSOR } from '@angular/forms';
-import { Observable } from 'rxjs';
+import { ControlValueAccessor, NG_VALUE_ACCESSOR, UntypedFormBuilder, UntypedFormGroup } from '@angular/forms';
+import { Observable, of } from 'rxjs';
 import { PageLink } from '@shared/models/page/page-link';
 import { Direction } from '@shared/models/page/sort-order';
-import { map, mergeMap, share, tap } from 'rxjs/operators';
+import { catchError, debounceTime, distinctUntilChanged, map, share, switchMap, tap } from 'rxjs/operators';
 import { Store } from '@ngrx/store';
 import { AppState } from '@app/core/core.state';
 import { TranslateService } from '@ngx-translate/core';
-import { coerceBooleanProperty } from '@angular/cdk/coercion';
 import { entityIdEquals } from '@shared/models/id/entity-id';
 import { TruncatePipe } from '@shared//pipe/truncate.pipe';
 import { ENTER } from '@angular/cdk/keycodes';
@@ -44,11 +45,18 @@ import { DeviceProfileService } from '@core/http/device-profile.service';
 import { DeviceProfileDialogComponent, DeviceProfileDialogData } from './device-profile-dialog.component';
 import { MatAutocomplete } from '@angular/material/autocomplete';
 import { AddDeviceProfileDialogComponent, AddDeviceProfileDialogData } from './add-device-profile-dialog.component';
+import { emptyPageData } from '@shared/models/page/page-data';
+import { getEntityDetailsPageURL } from '@core/utils';
+import { SubscriptSizing } from '@angular/material/form-field';
+import { coerceBoolean } from '@shared/decorators/coercion';
+import { AuthUser } from '@shared/models/user.model';
+import { getCurrentAuthUser } from '@core/auth/auth.selectors';
+import { Authority } from '@shared/models/authority.enum';
 
 @Component({
   selector: 'tb-device-profile-autocomplete',
   templateUrl: './device-profile-autocomplete.component.html',
-  styleUrls: [],
+  styleUrls: ['./device-profile-autocomplete.component.scss'],
   providers: [{
     provide: NG_VALUE_ACCESSOR,
     useExisting: forwardRef(() => DeviceProfileAutocompleteComponent),
@@ -57,11 +65,15 @@ import { AddDeviceProfileDialogComponent, AddDeviceProfileDialogData } from './a
 })
 export class DeviceProfileAutocompleteComponent implements ControlValueAccessor, OnInit, OnChanges {
 
-  selectDeviceProfileFormGroup: FormGroup;
+  selectDeviceProfileFormGroup: UntypedFormGroup;
 
   modelValue: DeviceProfileId | null;
 
   @Input()
+  subscriptSizing: SubscriptSizing = 'fixed';
+
+  @Input()
+  @coerceBoolean()
   selectDefaultProfile = false;
 
   @Input()
@@ -71,22 +83,22 @@ export class DeviceProfileAutocompleteComponent implements ControlValueAccessor,
   displayAllOnEmpty = false;
 
   @Input()
+  @coerceBoolean()
   editProfileEnabled = true;
 
   @Input()
+  @coerceBoolean()
   addNewProfile = true;
+
+  @Input()
+  showDetailsPageLink = false;
 
   @Input()
   transportType: DeviceTransportType = null;
 
-  private requiredValue: boolean;
-  get required(): boolean {
-    return this.requiredValue;
-  }
   @Input()
-  set required(value: boolean) {
-    this.requiredValue = coerceBooleanProperty(value);
-  }
+  @coerceBoolean()
+  required = false;
 
   @Input()
   disabled: boolean;
@@ -107,6 +119,11 @@ export class DeviceProfileAutocompleteComponent implements ControlValueAccessor,
   filteredDeviceProfiles: Observable<Array<DeviceProfileInfo>>;
 
   searchText = '';
+  deviceProfileURL: string;
+
+  useDeviceProfileLink = true;
+
+  private authUser: AuthUser;
 
   private dirty = false;
 
@@ -125,9 +142,13 @@ export class DeviceProfileAutocompleteComponent implements ControlValueAccessor,
               public translate: TranslateService,
               public truncate: TruncatePipe,
               private deviceProfileService: DeviceProfileService,
-              private fb: FormBuilder,
+              private fb: UntypedFormBuilder,
               private zone: NgZone,
               private dialog: MatDialog) {
+    this.authUser = getCurrentAuthUser(this.store);
+    if (this.authUser.authority === Authority.CUSTOMER_USER) {
+      this.useDeviceProfileLink = false;
+    }
     this.selectDeviceProfileFormGroup = this.fb.group({
       deviceProfile: [null]
     });
@@ -169,7 +190,9 @@ export class DeviceProfileAutocompleteComponent implements ControlValueAccessor,
             return '';
           }
         }),
-        mergeMap(name => this.fetchDeviceProfiles(name) ),
+        debounceTime(150),
+        distinctUntilChanged(),
+        switchMap(name => this.fetchDeviceProfiles(name)),
         share()
       );
   }
@@ -223,9 +246,9 @@ export class DeviceProfileAutocompleteComponent implements ControlValueAccessor,
   setDisabledState(isDisabled: boolean): void {
     this.disabled = isDisabled;
     if (this.disabled) {
-      this.selectDeviceProfileFormGroup.disable();
+      this.selectDeviceProfileFormGroup.disable({emitEvent: false});
     } else {
-      this.selectDeviceProfileFormGroup.enable();
+      this.selectDeviceProfileFormGroup.enable({emitEvent: false});
     }
   }
 
@@ -235,6 +258,9 @@ export class DeviceProfileAutocompleteComponent implements ControlValueAccessor,
       this.deviceProfileService.getDeviceProfileInfo(value.id).subscribe(
         (profile) => {
           this.modelValue = new DeviceProfileId(profile.id.id);
+          if (this.useDeviceProfileLink) {
+            this.deviceProfileURL = getEntityDetailsPageURL(this.modelValue.id, this.modelValue.entityType);
+          }
           this.selectDeviceProfileFormGroup.get('deviceProfile').patchValue(profile, {emitEvent: false});
           this.deviceProfileChanged.emit(profile);
         }
@@ -289,6 +315,7 @@ export class DeviceProfileAutocompleteComponent implements ControlValueAccessor,
       direction: Direction.ASC
     });
     return this.deviceProfileService.getDeviceProfileInfos(pageLink, this.transportType, {ignoreLoading: true}).pipe(
+      catchError(() => of(emptyPageData<DeviceProfileInfo>())),
       map(pageData => {
         let data = pageData.data;
         if (this.displayAllOnEmpty) {
@@ -322,7 +349,7 @@ export class DeviceProfileAutocompleteComponent implements ControlValueAccessor,
   }
 
   createDeviceProfile($event: Event, profileName: string) {
-    $event.preventDefault();
+    $event.stopPropagation();
     const deviceProfile: DeviceProfile = {
       name: profileName,
       transportType: this.transportType
@@ -333,7 +360,7 @@ export class DeviceProfileAutocompleteComponent implements ControlValueAccessor,
   }
 
   editDeviceProfile($event: Event) {
-    $event.preventDefault();
+    $event.stopPropagation();
     this.deviceProfileService.getDeviceProfile(this.modelValue.id).subscribe(
       (deviceProfile) => {
         this.openDeviceProfileDialog(deviceProfile, false);

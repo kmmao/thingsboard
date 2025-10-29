@@ -1,5 +1,5 @@
 /**
- * Copyright © 2016-2021 The Thingsboard Authors
+ * Copyright © 2016-2025 The Thingsboard Authors
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -15,13 +15,17 @@
  */
 package org.thingsboard.server.common.data.rule;
 
+import io.swagger.v3.oas.annotations.media.Schema;
 import lombok.Data;
 
 import java.util.List;
 
+@Schema
 @Data
 public class RuleChainData {
 
+    @Schema(requiredMode = Schema.RequiredMode.REQUIRED, description = "List of the Rule Chain objects.", accessMode = Schema.AccessMode.READ_ONLY)
     List<RuleChain> ruleChains;
+    @Schema(requiredMode = Schema.RequiredMode.REQUIRED, description = "List of the Rule Chain metadata objects.", accessMode = Schema.AccessMode.READ_ONLY)
     List<RuleChainMetaData> metadata;
 }

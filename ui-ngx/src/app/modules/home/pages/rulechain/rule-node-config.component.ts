@@ -1,5 +1,5 @@
 ///
-/// Copyright © 2016-2021 The Thingsboard Authors
+/// Copyright © 2016-2025 The Thingsboard Authors
 ///
 /// Licensed under the Apache License, Version 2.0 (the "License");
 /// you may not use this file except in compliance with the License.
@@ -15,17 +15,25 @@
 ///
 
 import {
-  AfterViewInit,
   Component,
   ComponentRef,
+  EventEmitter,
   forwardRef,
+  HostBinding,
   Input,
   OnDestroy,
-  OnInit,
+  Output,
   ViewChild,
-  ViewContainerRef
+  ViewContainerRef,
+  ViewEncapsulation
 } from '@angular/core';
-import { ControlValueAccessor, FormBuilder, FormGroup, NG_VALUE_ACCESSOR, Validators } from '@angular/forms';
+import {
+  ControlValueAccessor,
+  NG_VALUE_ACCESSOR,
+  UntypedFormBuilder,
+  UntypedFormGroup,
+  Validators
+} from '@angular/forms';
 import {
   IRuleNodeConfigurationComponent,
   RuleNodeConfiguration,
@@ -34,9 +42,9 @@ import {
 import { Subscription } from 'rxjs';
 import { RuleChainService } from '@core/http/rule-chain.service';
 import { coerceBooleanProperty } from '@angular/cdk/coercion';
-import { TranslateService } from '@ngx-translate/core';
 import { JsonObjectEditComponent } from '@shared/components/json-object-edit.component';
 import { deepClone } from '@core/utils';
+import { RuleChainType } from '@shared/models/rule-chain.models';
 
 @Component({
   selector: 'tb-rule-node-config',
@@ -46,13 +54,15 @@ import { deepClone } from '@core/utils';
     provide: NG_VALUE_ACCESSOR,
     useExisting: forwardRef(() => RuleNodeConfigComponent),
     multi: true
-  }]
+  }],
+  encapsulation: ViewEncapsulation.None
 })
-export class RuleNodeConfigComponent implements ControlValueAccessor, OnInit, OnDestroy, AfterViewInit {
+export class RuleNodeConfigComponent implements ControlValueAccessor, OnDestroy {
 
   @ViewChild('definedConfigContent', {read: ViewContainerRef, static: true}) definedConfigContainer: ViewContainerRef;
-
   @ViewChild('jsonObjectEditComponent') jsonObjectEditComponent: JsonObjectEditComponent;
+
+  @HostBinding('style.display') readonly styleDisplay = 'block';
 
   private requiredValue: boolean;
   get required(): boolean {
@@ -69,6 +79,18 @@ export class RuleNodeConfigComponent implements ControlValueAccessor, OnInit, On
   @Input()
   ruleNodeId: string;
 
+  @Input()
+  ruleChainId: string;
+
+  @Input()
+  ruleChainType: RuleChainType;
+
+  @Output()
+  initRuleNode = new EventEmitter<void>();
+
+  @Output()
+  changeScript = new EventEmitter<void>();
+
   nodeDefinitionValue: RuleNodeDefinition;
 
   @Input()
@@ -78,6 +100,7 @@ export class RuleNodeConfigComponent implements ControlValueAccessor, OnInit, On
       if (this.nodeDefinitionValue) {
         this.validateDefinedDirective();
       }
+      setTimeout(() => this.initRuleNode.emit());
     }
   }
 
@@ -87,20 +110,22 @@ export class RuleNodeConfigComponent implements ControlValueAccessor, OnInit, On
 
   definedDirectiveError: string;
 
-  ruleNodeConfigFormGroup: FormGroup;
+  ruleNodeConfigFormGroup: UntypedFormGroup;
 
   changeSubscription: Subscription;
 
+  changeScriptSubscription: Subscription;
+
+  definedConfigComponent: IRuleNodeConfigurationComponent;
+
   private definedConfigComponentRef: ComponentRef<IRuleNodeConfigurationComponent>;
-  private definedConfigComponent: IRuleNodeConfigurationComponent;
 
   private configuration: RuleNodeConfiguration;
 
-  private propagateChange = (v: any) => { };
+  private propagateChange = (_v: any) => { };
 
-  constructor(private translate: TranslateService,
-              private ruleChainService: RuleChainService,
-              private fb: FormBuilder) {
+  constructor(private ruleChainService: RuleChainService,
+              private fb: UntypedFormBuilder) {
     this.ruleNodeConfigFormGroup = this.fb.group({
       configuration: [null, Validators.required]
     });
@@ -110,19 +135,21 @@ export class RuleNodeConfigComponent implements ControlValueAccessor, OnInit, On
     this.propagateChange = fn;
   }
 
-  registerOnTouched(fn: any): void {
-  }
-
-  ngOnInit(): void {
+  registerOnTouched(_fn: any): void {
   }
 
   ngOnDestroy(): void {
     if (this.definedConfigComponentRef) {
       this.definedConfigComponentRef.destroy();
     }
-  }
-
-  ngAfterViewInit(): void {
+    if (this.changeSubscription) {
+      this.changeSubscription.unsubscribe();
+      this.changeSubscription = null;
+    }
+    if (this.changeScriptSubscription) {
+      this.changeScriptSubscription.unsubscribe();
+      this.changeScriptSubscription = null;
+    }
   }
 
   setDisabledState(isDisabled: boolean): void {
@@ -131,6 +158,9 @@ export class RuleNodeConfigComponent implements ControlValueAccessor, OnInit, On
       this.ruleNodeConfigFormGroup.disable({emitEvent: false});
     } else {
       this.ruleNodeConfigFormGroup.enable({emitEvent: false});
+    }
+    if (this.definedConfigComponent) {
+      this.definedConfigComponent.disabled = this.disabled;
     }
   }
 
@@ -181,15 +211,24 @@ export class RuleNodeConfigComponent implements ControlValueAccessor, OnInit, On
         this.changeSubscription.unsubscribe();
         this.changeSubscription = null;
       }
+      if (this.changeScriptSubscription) {
+        this.changeScriptSubscription.unsubscribe();
+        this.changeScriptSubscription = null;
+      }
       this.definedConfigContainer.clear();
-      const factory = this.ruleChainService.getRuleNodeConfigFactory(this.nodeDefinition.configDirective);
-      this.definedConfigComponentRef = this.definedConfigContainer.createComponent(factory);
+      const component = this.ruleChainService.getRuleNodeConfigComponent(this.nodeDefinition.configDirective);
+      this.definedConfigComponentRef = this.definedConfigContainer.createComponent(component);
       this.definedConfigComponent = this.definedConfigComponentRef.instance;
       this.definedConfigComponent.ruleNodeId = this.ruleNodeId;
+      this.definedConfigComponent.ruleChainId = this.ruleChainId;
+      this.definedConfigComponent.ruleChainType = this.ruleChainType;
       this.definedConfigComponent.configuration = this.configuration;
       this.changeSubscription = this.definedConfigComponent.configurationChanged.subscribe((configuration) => {
         this.updateModel(configuration);
       });
+      if (this.definedConfigComponent?.changeScript) {
+        this.changeScriptSubscription = this.definedConfigComponent.changeScript.subscribe(() => this.changeScript.emit());
+      }
     }
   }
 

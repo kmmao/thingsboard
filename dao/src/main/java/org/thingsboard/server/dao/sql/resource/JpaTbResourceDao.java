@@ -1,5 +1,5 @@
 /**
- * Copyright © 2016-2021 The Thingsboard Authors
+ * Copyright © 2016-2025 The Thingsboard Authors
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -16,25 +16,31 @@
 package org.thingsboard.server.dao.sql.resource;
 
 import lombok.extern.slf4j.Slf4j;
-import org.springframework.data.repository.CrudRepository;
+import org.springframework.data.jpa.repository.JpaRepository;
 import org.springframework.stereotype.Component;
+import org.thingsboard.server.common.data.EntityType;
+import org.thingsboard.server.common.data.ResourceSubType;
 import org.thingsboard.server.common.data.ResourceType;
 import org.thingsboard.server.common.data.TbResource;
+import org.thingsboard.server.common.data.TbResourceDataInfo;
+import org.thingsboard.server.common.data.id.TbResourceId;
 import org.thingsboard.server.common.data.id.TenantId;
 import org.thingsboard.server.common.data.page.PageData;
 import org.thingsboard.server.common.data.page.PageLink;
 import org.thingsboard.server.dao.DaoUtil;
+import org.thingsboard.server.dao.TenantEntityDao;
 import org.thingsboard.server.dao.model.sql.TbResourceEntity;
 import org.thingsboard.server.dao.resource.TbResourceDao;
-import org.thingsboard.server.dao.sql.JpaAbstractSearchTextDao;
+import org.thingsboard.server.dao.sql.JpaAbstractDao;
+import org.thingsboard.server.dao.util.SqlDao;
 
 import java.util.List;
-import java.util.Objects;
 import java.util.UUID;
 
 @Slf4j
 @Component
-public class JpaTbResourceDao extends JpaAbstractSearchTextDao<TbResourceEntity, TbResource> implements TbResourceDao {
+@SqlDao
+public class JpaTbResourceDao extends JpaAbstractDao<TbResourceEntity, TbResource> implements TbResourceDao, TenantEntityDao<TbResource> {
 
     private final TbResourceRepository resourceRepository;
 
@@ -48,13 +54,12 @@ public class JpaTbResourceDao extends JpaAbstractSearchTextDao<TbResourceEntity,
     }
 
     @Override
-    protected CrudRepository<TbResourceEntity, UUID> getCrudRepository() {
+    protected JpaRepository<TbResourceEntity, UUID> getRepository() {
         return resourceRepository;
     }
 
     @Override
-    public TbResource getResource(TenantId tenantId, ResourceType resourceType, String resourceKey) {
-
+    public TbResource findResourceByTenantIdAndKey(TenantId tenantId, ResourceType resourceType, String resourceKey) {
         return DaoUtil.getData(resourceRepository.findByTenantIdAndResourceTypeAndResourceKey(tenantId.getId(), resourceType.name(), resourceKey));
     }
 
@@ -66,18 +71,21 @@ public class JpaTbResourceDao extends JpaAbstractSearchTextDao<TbResourceEntity,
     @Override
     public PageData<TbResource> findResourcesByTenantIdAndResourceType(TenantId tenantId,
                                                                        ResourceType resourceType,
+                                                                       ResourceSubType resourceSubType,
                                                                        PageLink pageLink) {
         return DaoUtil.toPageData(resourceRepository.findResourcesPage(
                 tenantId.getId(),
                 TenantId.SYS_TENANT_ID.getId(),
                 resourceType.name(),
-                Objects.toString(pageLink.getTextSearch(), ""),
+                resourceSubType != null ? resourceSubType.name() : null,
+                pageLink.getTextSearch(),
                 DaoUtil.toPageable(pageLink)
         ));
     }
 
     @Override
     public List<TbResource> findResourcesByTenantIdAndResourceType(TenantId tenantId, ResourceType resourceType,
+                                                                   ResourceSubType resourceSubType,
                                                                    String[] objectIds,
                                                                    String searchText) {
         return objectIds == null ?
@@ -85,7 +93,8 @@ public class JpaTbResourceDao extends JpaAbstractSearchTextDao<TbResourceEntity,
                         tenantId.getId(),
                         TenantId.SYS_TENANT_ID.getId(),
                         resourceType.name(),
-                        Objects.toString(searchText, ""))) :
+                        resourceSubType != null ? resourceSubType.name() : null,
+                        searchText)) :
                 DaoUtil.convertDataList(resourceRepository.findResourcesByIds(
                         tenantId.getId(),
                         TenantId.SYS_TENANT_ID.getId(),
@@ -93,7 +102,54 @@ public class JpaTbResourceDao extends JpaAbstractSearchTextDao<TbResourceEntity,
     }
 
     @Override
+    public byte[] getResourceData(TenantId tenantId, TbResourceId resourceId) {
+        return resourceRepository.getDataById(resourceId.getId());
+    }
+
+    @Override
+    public byte[] getResourcePreview(TenantId tenantId, TbResourceId resourceId) {
+        return resourceRepository.getPreviewById(resourceId.getId());
+    }
+
+    @Override
+    public long getResourceSize(TenantId tenantId, TbResourceId resourceId) {
+        return resourceRepository.getDataSizeById(resourceId.getId());
+    }
+
+    @Override
+    public TbResourceDataInfo getResourceDataInfo(TenantId tenantId, TbResourceId resourceId) {
+        return resourceRepository.getDataInfoById(resourceId.getId());
+    }
+
+    @Override
     public Long sumDataSizeByTenantId(TenantId tenantId) {
         return resourceRepository.sumDataSizeByTenantId(tenantId.getId());
     }
+
+    @Override
+    public TbResource findByTenantIdAndExternalId(UUID tenantId, UUID externalId) {
+        return DaoUtil.getData(resourceRepository.findByTenantIdAndExternalId(tenantId, externalId));
+    }
+
+    @Override
+    public PageData<TbResource> findByTenantId(UUID tenantId, PageLink pageLink) {
+        return findAllByTenantId(TenantId.fromUUID(tenantId), pageLink);
+    }
+
+    @Override
+    public PageData<TbResourceId> findIdsByTenantId(UUID tenantId, PageLink pageLink) {
+        return DaoUtil.pageToPageData(resourceRepository.findIdsByTenantId(tenantId, DaoUtil.toPageable(pageLink))
+                .map(TbResourceId::new));
+    }
+
+    @Override
+    public TbResourceId getExternalIdByInternal(TbResourceId internalId) {
+        return DaoUtil.toEntityId(resourceRepository.getExternalIdByInternal(internalId.getId()), TbResourceId::new);
+    }
+
+    @Override
+    public EntityType getEntityType() {
+        return EntityType.TB_RESOURCE;
+    }
+
 }

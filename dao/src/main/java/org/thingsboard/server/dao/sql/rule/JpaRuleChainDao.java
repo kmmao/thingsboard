@@ -1,5 +1,5 @@
 /**
- * Copyright © 2016-2021 The Thingsboard Authors
+ * Copyright © 2016-2025 The Thingsboard Authors
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -15,41 +15,39 @@
  */
 package org.thingsboard.server.dao.sql.rule;
 
-import com.google.common.util.concurrent.Futures;
-import com.google.common.util.concurrent.ListenableFuture;
-import com.google.common.util.concurrent.MoreExecutors;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Autowired;
-import org.springframework.data.repository.CrudRepository;
+import org.springframework.data.domain.Limit;
+import org.springframework.data.domain.PageRequest;
+import org.springframework.data.jpa.repository.JpaRepository;
 import org.springframework.stereotype.Component;
+import org.thingsboard.server.common.data.EntityInfo;
+import org.thingsboard.server.common.data.EntityType;
+import org.thingsboard.server.common.data.edqs.fields.RuleChainFields;
+import org.thingsboard.server.common.data.id.RuleChainId;
 import org.thingsboard.server.common.data.id.TenantId;
 import org.thingsboard.server.common.data.page.PageData;
 import org.thingsboard.server.common.data.page.PageLink;
-import org.thingsboard.server.common.data.relation.EntityRelation;
-import org.thingsboard.server.common.data.relation.RelationTypeGroup;
 import org.thingsboard.server.common.data.rule.RuleChain;
 import org.thingsboard.server.common.data.rule.RuleChainType;
 import org.thingsboard.server.dao.DaoUtil;
 import org.thingsboard.server.dao.model.sql.RuleChainEntity;
-import org.thingsboard.server.dao.relation.RelationDao;
 import org.thingsboard.server.dao.rule.RuleChainDao;
-import org.thingsboard.server.dao.sql.JpaAbstractSearchTextDao;
+import org.thingsboard.server.dao.sql.JpaAbstractDao;
+import org.thingsboard.server.dao.util.SqlDao;
 
-import java.util.ArrayList;
-import java.util.Collections;
+import java.util.Collection;
 import java.util.List;
-import java.util.Objects;
+import java.util.Optional;
 import java.util.UUID;
 
 @Slf4j
 @Component
-public class JpaRuleChainDao extends JpaAbstractSearchTextDao<RuleChainEntity, RuleChain> implements RuleChainDao {
+@SqlDao
+public class JpaRuleChainDao extends JpaAbstractDao<RuleChainEntity, RuleChain> implements RuleChainDao {
 
     @Autowired
     private RuleChainRepository ruleChainRepository;
-
-    @Autowired
-    private RelationDao relationDao;
 
     @Override
     protected Class<RuleChainEntity> getEntityClass() {
@@ -57,7 +55,7 @@ public class JpaRuleChainDao extends JpaAbstractSearchTextDao<RuleChainEntity, R
     }
 
     @Override
-    protected CrudRepository<RuleChainEntity, UUID> getCrudRepository() {
+    protected JpaRepository<RuleChainEntity, UUID> getRepository() {
         return ruleChainRepository;
     }
 
@@ -67,7 +65,7 @@ public class JpaRuleChainDao extends JpaAbstractSearchTextDao<RuleChainEntity, R
         return DaoUtil.toPageData(ruleChainRepository
                 .findByTenantId(
                         tenantId,
-                        Objects.toString(pageLink.getTextSearch(), ""),
+                        pageLink.getTextSearch(),
                         DaoUtil.toPageable(pageLink)));
     }
 
@@ -78,7 +76,7 @@ public class JpaRuleChainDao extends JpaAbstractSearchTextDao<RuleChainEntity, R
                 .findByTenantIdAndType(
                         tenantId,
                         type,
-                        Objects.toString(pageLink.getTextSearch(), ""),
+                        pageLink.getTextSearch(),
                         DaoUtil.toPageable(pageLink)));
     }
 
@@ -91,35 +89,78 @@ public class JpaRuleChainDao extends JpaAbstractSearchTextDao<RuleChainEntity, R
     @Override
     public PageData<RuleChain> findRuleChainsByTenantIdAndEdgeId(UUID tenantId, UUID edgeId, PageLink pageLink) {
         log.debug("Try to find rule chains by tenantId [{}], edgeId [{}] and pageLink [{}]", tenantId, edgeId, pageLink);
-
         return DaoUtil.toPageData(ruleChainRepository
                 .findByTenantIdAndEdgeId(
                         tenantId,
                         edgeId,
-                        Objects.toString(pageLink.getTextSearch(), ""),
+                        pageLink.getTextSearch(),
                         DaoUtil.toPageable(pageLink)));
     }
 
     @Override
-    public ListenableFuture<List<RuleChain>> findAutoAssignToEdgeRuleChainsByTenantId(UUID tenantId) {
+    public PageData<RuleChain> findAutoAssignToEdgeRuleChainsByTenantId(UUID tenantId, PageLink pageLink) {
         log.debug("Try to find auto assign to edge rule chains by tenantId [{}]", tenantId);
-        ListenableFuture<List<EntityRelation>> relations =
-                relationDao.findAllByFromAndType(new TenantId(tenantId), new TenantId(tenantId), EntityRelation.CONTAINS_TYPE, RelationTypeGroup.EDGE_AUTO_ASSIGN_RULE_CHAIN);
-        return Futures.transformAsync(relations, input -> {
-            if (input != null && !input.isEmpty()) {
-                List<ListenableFuture<RuleChain>> ruleChainsFutures = new ArrayList<>(input.size());
-                for (EntityRelation relation : input) {
-                    ruleChainsFutures.add(findByIdAsync(new TenantId(tenantId), relation.getTo().getId()));
-                }
-                return Futures.successfulAsList(ruleChainsFutures);
-            } else {
-                return Futures.immediateFuture(Collections.emptyList());
-            }
-        }, MoreExecutors.directExecutor());
+        return DaoUtil.toPageData(ruleChainRepository
+                .findAutoAssignByTenantId(
+                        tenantId,
+                        pageLink.getTextSearch(),
+                        DaoUtil.toPageable(pageLink)));
+    }
+
+    @Override
+    public Collection<RuleChain> findByTenantIdAndTypeAndName(TenantId tenantId, RuleChainType type, String name) {
+        return DaoUtil.convertDataList(ruleChainRepository.findByTenantIdAndTypeAndName(tenantId.getId(), type, name));
     }
 
     @Override
     public Long countByTenantId(TenantId tenantId) {
         return ruleChainRepository.countByTenantId(tenantId.getId());
     }
+
+    @Override
+    public RuleChain findByTenantIdAndExternalId(UUID tenantId, UUID externalId) {
+        return DaoUtil.getData(ruleChainRepository.findByTenantIdAndExternalId(tenantId, externalId));
+    }
+
+    @Override
+    public PageData<RuleChain> findByTenantId(UUID tenantId, PageLink pageLink) {
+        return findRuleChainsByTenantId(tenantId, pageLink);
+    }
+
+    @Override
+    public RuleChainId getExternalIdByInternal(RuleChainId internalId) {
+        return Optional.ofNullable(ruleChainRepository.getExternalIdById(internalId.getId()))
+                .map(RuleChainId::new).orElse(null);
+    }
+
+    @Override
+    public RuleChain findDefaultEntityByTenantId(UUID tenantId) {
+        return findRootRuleChainByTenantIdAndType(tenantId, RuleChainType.CORE);
+    }
+
+    @Override
+    public PageData<RuleChain> findAllByTenantId(TenantId tenantId, PageLink pageLink) {
+        return findRuleChainsByTenantId(tenantId.getId(), pageLink);
+    }
+
+    @Override
+    public List<EntityInfo> findByTenantIdAndResource(TenantId tenantId, String reference, int limit) {
+        return ruleChainRepository.findRuleChainsByTenantIdAndResource(tenantId.getId(), reference, PageRequest.of(0, limit));
+    }
+
+    @Override
+    public List<EntityInfo> findByResource(String reference, int limit) {
+        return ruleChainRepository.findRuleChainsByResource(reference, PageRequest.of(0, limit));
+    }
+
+    @Override
+    public List<RuleChainFields> findNextBatch(UUID id, int batchSize) {
+        return ruleChainRepository.findNextBatch(id, Limit.of(batchSize));
+    }
+
+    @Override
+    public EntityType getEntityType() {
+        return EntityType.RULE_CHAIN;
+    }
+
 }

@@ -1,5 +1,5 @@
 /**
- * Copyright © 2016-2021 The Thingsboard Authors
+ * Copyright © 2016-2025 The Thingsboard Authors
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -17,27 +17,36 @@ package org.thingsboard.server.actors;
 
 import lombok.extern.slf4j.Slf4j;
 
+import java.util.concurrent.CountDownLatch;
+import java.util.concurrent.TimeUnit;
+
 @Slf4j
 public class SlowCreateActor extends TestRootActor {
 
-    public SlowCreateActor(TbActorId actorId, ActorTestCtx testCtx) {
+    public static final int TIMEOUT_AWAIT_MAX_MS = 5000;
+
+    public SlowCreateActor(TbActorId actorId, ActorTestCtx testCtx, CountDownLatch initLatch) {
         super(actorId, testCtx);
         try {
-            Thread.sleep(500);
+            log.info("awaiting on latch {} ...", initLatch);
+            initLatch.await(TIMEOUT_AWAIT_MAX_MS, TimeUnit.MILLISECONDS);
         } catch (InterruptedException e) {
-            e.printStackTrace();
+            log.error("interrupted", e);
         }
         testCtx.getInvocationCount().incrementAndGet();
+        log.info("finished {} ...", initLatch);
     }
 
     public static class SlowCreateActorCreator implements TbActorCreator {
 
         private final TbActorId actorId;
         private final ActorTestCtx testCtx;
+        private final CountDownLatch initLatch;
 
-        public SlowCreateActorCreator(TbActorId actorId, ActorTestCtx testCtx) {
+        public SlowCreateActorCreator(TbActorId actorId, ActorTestCtx testCtx, CountDownLatch initLatch) {
             this.actorId = actorId;
             this.testCtx = testCtx;
+            this.initLatch = initLatch;
         }
 
         @Override
@@ -47,7 +56,10 @@ public class SlowCreateActor extends TestRootActor {
 
         @Override
         public TbActor createActor() {
-            return new SlowCreateActor(actorId, testCtx);
+            log.info("creating slow actor...");
+            SlowCreateActor slowCreateActor = new SlowCreateActor(actorId, testCtx, initLatch);
+            log.info("created slow actor {}", slowCreateActor);
+            return slowCreateActor;
         }
     }
 }

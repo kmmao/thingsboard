@@ -1,5 +1,5 @@
 /**
- * Copyright © 2016-2021 The Thingsboard Authors
+ * Copyright © 2016-2025 The Thingsboard Authors
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -16,36 +16,27 @@
 package org.thingsboard.server.dao.model.sql;
 
 import com.fasterxml.jackson.databind.JsonNode;
+import jakarta.persistence.Column;
+import jakarta.persistence.Convert;
+import jakarta.persistence.MappedSuperclass;
 import lombok.Data;
 import lombok.EqualsAndHashCode;
-import org.hibernate.annotations.Type;
-import org.hibernate.annotations.TypeDef;
 import org.thingsboard.server.common.data.Tenant;
-import org.thingsboard.server.common.data.id.CustomerId;
 import org.thingsboard.server.common.data.id.TenantId;
 import org.thingsboard.server.common.data.id.TenantProfileId;
-import org.thingsboard.server.dao.model.BaseSqlEntity;
+import org.thingsboard.server.dao.model.BaseVersionedEntity;
 import org.thingsboard.server.dao.model.ModelConstants;
-import org.thingsboard.server.dao.model.SearchTextEntity;
-import org.thingsboard.server.dao.util.mapping.JsonStringType;
+import org.thingsboard.server.dao.util.mapping.JsonConverter;
 
-import javax.persistence.Column;
-import javax.persistence.Entity;
-import javax.persistence.MappedSuperclass;
-import javax.persistence.Table;
 import java.util.UUID;
 
 @Data
 @EqualsAndHashCode(callSuper = true)
-@TypeDef(name = "json", typeClass = JsonStringType.class)
 @MappedSuperclass
-public abstract class AbstractTenantEntity<T extends Tenant> extends BaseSqlEntity<T> implements SearchTextEntity<T> {
+public abstract class AbstractTenantEntity<T extends Tenant> extends BaseVersionedEntity<T> {
 
     @Column(name = ModelConstants.TENANT_TITLE_PROPERTY)
     private String title;
-
-    @Column(name = ModelConstants.SEARCH_TEXT_PROPERTY)
-    private String searchText;
 
     @Column(name = ModelConstants.TENANT_REGION_PROPERTY)
     private String region;
@@ -74,7 +65,7 @@ public abstract class AbstractTenantEntity<T extends Tenant> extends BaseSqlEnti
     @Column(name = ModelConstants.EMAIL_PROPERTY)
     private String email;
 
-    @Type(type = "json")
+    @Convert(converter = JsonConverter.class)
     @Column(name = ModelConstants.TENANT_ADDITIONAL_INFO_PROPERTY)
     private JsonNode additionalInfo;
 
@@ -85,11 +76,8 @@ public abstract class AbstractTenantEntity<T extends Tenant> extends BaseSqlEnti
         super();
     }
 
-    public AbstractTenantEntity(Tenant tenant) {
-        if (tenant.getId() != null) {
-            this.setUuid(tenant.getId().getId());
-        }
-        this.setCreatedTime(tenant.getCreatedTime());
+    public AbstractTenantEntity(T tenant) {
+        super(tenant);
         this.title = tenant.getTitle();
         this.region = tenant.getRegion();
         this.country = tenant.getCountry();
@@ -107,8 +95,7 @@ public abstract class AbstractTenantEntity<T extends Tenant> extends BaseSqlEnti
     }
 
     public AbstractTenantEntity(TenantEntity tenantEntity) {
-        this.setId(tenantEntity.getId());
-        this.setCreatedTime(tenantEntity.getCreatedTime());
+        super(tenantEntity);
         this.title = tenantEntity.getTitle();
         this.region = tenantEntity.getRegion();
         this.country = tenantEntity.getCountry();
@@ -123,23 +110,10 @@ public abstract class AbstractTenantEntity<T extends Tenant> extends BaseSqlEnti
         this.tenantProfileId = tenantEntity.getTenantProfileId();
     }
 
-    @Override
-    public String getSearchTextSource() {
-        return title;
-    }
-
-    @Override
-    public void setSearchText(String searchText) {
-        this.searchText = searchText;
-    }
-
-    public String getSearchText() {
-        return searchText;
-    }
-
     protected Tenant toTenant() {
-        Tenant tenant = new Tenant(new TenantId(this.getUuid()));
+        Tenant tenant = new Tenant(TenantId.fromUUID(this.getUuid()));
         tenant.setCreatedTime(createdTime);
+        tenant.setVersion(version);
         tenant.setTitle(title);
         tenant.setRegion(region);
         tenant.setCountry(country);

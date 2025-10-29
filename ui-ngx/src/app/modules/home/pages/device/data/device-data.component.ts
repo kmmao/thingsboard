@@ -1,5 +1,5 @@
 ///
-/// Copyright © 2016-2021 The Thingsboard Authors
+/// Copyright © 2016-2025 The Thingsboard Authors
 ///
 /// Licensed under the Apache License, Version 2.0 (the "License");
 /// you may not use this file except in compliance with the License.
@@ -14,8 +14,17 @@
 /// limitations under the License.
 ///
 
-import { Component, forwardRef, Input, OnInit } from '@angular/core';
-import { ControlValueAccessor, FormBuilder, FormGroup, NG_VALUE_ACCESSOR, Validators } from '@angular/forms';
+import { Component, DestroyRef, forwardRef, Input, OnInit } from '@angular/core';
+import {
+  ControlValueAccessor,
+  UntypedFormBuilder,
+  UntypedFormGroup,
+  NG_VALIDATORS,
+  NG_VALUE_ACCESSOR,
+  ValidationErrors,
+  Validator,
+  Validators
+} from '@angular/forms';
 import { Store } from '@ngrx/store';
 import { AppState } from '@app/core/core.state';
 import { coerceBooleanProperty } from '@angular/cdk/coercion';
@@ -24,20 +33,28 @@ import {
   deviceProfileTypeConfigurationInfoMap,
   deviceTransportTypeConfigurationInfoMap
 } from '@shared/models/device.models';
+import { takeUntilDestroyed } from '@angular/core/rxjs-interop';
 
 @Component({
   selector: 'tb-device-data',
   templateUrl: './device-data.component.html',
   styleUrls: [],
-  providers: [{
-    provide: NG_VALUE_ACCESSOR,
-    useExisting: forwardRef(() => DeviceDataComponent),
-    multi: true
-  }]
+  providers: [
+    {
+      provide: NG_VALUE_ACCESSOR,
+      useExisting: forwardRef(() => DeviceDataComponent),
+      multi: true
+    },
+    {
+      provide: NG_VALIDATORS,
+      useExisting: forwardRef(() => DeviceDataComponent),
+      multi: true
+    },
+  ]
 })
-export class DeviceDataComponent implements ControlValueAccessor, OnInit {
+export class DeviceDataComponent implements ControlValueAccessor, OnInit, Validator {
 
-  deviceDataFormGroup: FormGroup;
+  deviceDataFormGroup: UntypedFormGroup;
 
   private requiredValue: boolean;
   get required(): boolean {
@@ -57,7 +74,8 @@ export class DeviceDataComponent implements ControlValueAccessor, OnInit {
   private propagateChange = (v: any) => { };
 
   constructor(private store: Store<AppState>,
-              private fb: FormBuilder) {
+              private fb: UntypedFormBuilder,
+              private destroyRef: DestroyRef) {
   }
 
   registerOnChange(fn: any): void {
@@ -72,7 +90,9 @@ export class DeviceDataComponent implements ControlValueAccessor, OnInit {
       configuration: [null, Validators.required],
       transportConfiguration: [null, Validators.required]
     });
-    this.deviceDataFormGroup.valueChanges.subscribe(() => {
+    this.deviceDataFormGroup.valueChanges.pipe(
+      takeUntilDestroyed(this.destroyRef)
+    ).subscribe(() => {
       this.updateModel();
     });
   }
@@ -95,6 +115,12 @@ export class DeviceDataComponent implements ControlValueAccessor, OnInit {
       deviceTransportTypeConfigurationInfoMap.get(deviceTransportType).hasDeviceConfiguration;
     this.deviceDataFormGroup.patchValue({configuration: value?.configuration}, {emitEvent: false});
     this.deviceDataFormGroup.patchValue({transportConfiguration: value?.transportConfiguration}, {emitEvent: false});
+  }
+
+  validate(): ValidationErrors | null {
+    return this.deviceDataFormGroup.valid ? null : {
+      deviceDataForm: false
+    };
   }
 
   private updateModel() {

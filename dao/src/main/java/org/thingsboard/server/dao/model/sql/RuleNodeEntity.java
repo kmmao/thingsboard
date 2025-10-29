@@ -1,5 +1,5 @@
 /**
- * Copyright © 2016-2021 The Thingsboard Authors
+ * Copyright © 2016-2025 The Thingsboard Authors
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -16,30 +16,30 @@
 package org.thingsboard.server.dao.model.sql;
 
 import com.fasterxml.jackson.databind.JsonNode;
+import jakarta.persistence.Column;
+import jakarta.persistence.Convert;
+import jakarta.persistence.Entity;
+import jakarta.persistence.Table;
 import lombok.Data;
 import lombok.EqualsAndHashCode;
-import org.hibernate.annotations.Type;
-import org.hibernate.annotations.TypeDef;
+import org.thingsboard.common.util.JacksonUtil;
+import org.thingsboard.server.common.data.StringUtils;
+import org.thingsboard.server.common.data.debug.DebugSettings;
 import org.thingsboard.server.common.data.id.RuleChainId;
 import org.thingsboard.server.common.data.id.RuleNodeId;
 import org.thingsboard.server.common.data.rule.RuleNode;
 import org.thingsboard.server.dao.DaoUtil;
 import org.thingsboard.server.dao.model.BaseSqlEntity;
 import org.thingsboard.server.dao.model.ModelConstants;
-import org.thingsboard.server.dao.model.SearchTextEntity;
-import org.thingsboard.server.dao.util.mapping.JsonStringType;
+import org.thingsboard.server.dao.util.mapping.JsonConverter;
 
-import javax.persistence.Column;
-import javax.persistence.Entity;
-import javax.persistence.Table;
 import java.util.UUID;
 
 @Data
 @EqualsAndHashCode(callSuper = true)
 @Entity
-@TypeDef(name = "json", typeClass = JsonStringType.class)
-@Table(name = ModelConstants.RULE_NODE_COLUMN_FAMILY_NAME)
-public class RuleNodeEntity extends BaseSqlEntity<RuleNode> implements SearchTextEntity<RuleNode> {
+@Table(name = ModelConstants.RULE_NODE_TABLE_NAME)
+public class RuleNodeEntity extends BaseSqlEntity<RuleNode> {
 
     @Column(name = ModelConstants.RULE_NODE_CHAIN_ID_PROPERTY)
     private UUID ruleChainId;
@@ -50,19 +50,28 @@ public class RuleNodeEntity extends BaseSqlEntity<RuleNode> implements SearchTex
     @Column(name = ModelConstants.RULE_NODE_NAME_PROPERTY)
     private String name;
 
-    @Column(name = ModelConstants.SEARCH_TEXT_PROPERTY)
-    private String searchText;
+    @Column(name = ModelConstants.RULE_NODE_VERSION_PROPERTY)
+    private int configurationVersion;
 
-    @Type(type = "json")
+    @Convert(converter = JsonConverter.class)
     @Column(name = ModelConstants.RULE_NODE_CONFIGURATION_PROPERTY)
     private JsonNode configuration;
 
-    @Type(type = "json")
+    @Convert(converter = JsonConverter.class)
     @Column(name = ModelConstants.ADDITIONAL_INFO_PROPERTY)
     private JsonNode additionalInfo;
 
-    @Column(name = ModelConstants.DEBUG_MODE)
-    private boolean debugMode;
+    @Column(name = ModelConstants.DEBUG_SETTINGS)
+    private String debugSettings;
+
+    @Column(name = ModelConstants.SINGLETON_MODE)
+    private boolean singletonMode;
+
+    @Column(name = ModelConstants.QUEUE_NAME)
+    private String queueName;
+
+    @Column(name = ModelConstants.EXTERNAL_ID_PROPERTY)
+    private UUID externalId;
 
     public RuleNodeEntity() {
     }
@@ -77,20 +86,15 @@ public class RuleNodeEntity extends BaseSqlEntity<RuleNode> implements SearchTex
         }
         this.type = ruleNode.getType();
         this.name = ruleNode.getName();
-        this.debugMode = ruleNode.isDebugMode();
-        this.searchText = ruleNode.getName();
+        this.debugSettings = JacksonUtil.toString(ruleNode.getDebugSettings());
+        this.singletonMode = ruleNode.isSingletonMode();
+        this.queueName = ruleNode.getQueueName();
+        this.configurationVersion = ruleNode.getConfigurationVersion();
         this.configuration = ruleNode.getConfiguration();
         this.additionalInfo = ruleNode.getAdditionalInfo();
-    }
-
-    @Override
-    public String getSearchTextSource() {
-        return searchText;
-    }
-
-    @Override
-    public void setSearchText(String searchText) {
-        this.searchText = searchText;
+        if (ruleNode.getExternalId() != null) {
+            this.externalId = ruleNode.getExternalId().getId();
+        }
     }
 
     @Override
@@ -102,9 +106,15 @@ public class RuleNodeEntity extends BaseSqlEntity<RuleNode> implements SearchTex
         }
         ruleNode.setType(type);
         ruleNode.setName(name);
-        ruleNode.setDebugMode(debugMode);
+        ruleNode.setDebugSettings(JacksonUtil.fromString(debugSettings, DebugSettings.class));
+        ruleNode.setSingletonMode(singletonMode);
+        ruleNode.setQueueName(queueName);
+        ruleNode.setConfigurationVersion(configurationVersion);
         ruleNode.setConfiguration(configuration);
         ruleNode.setAdditionalInfo(additionalInfo);
+        if (externalId != null) {
+            ruleNode.setExternalId(new RuleNodeId(externalId));
+        }
         return ruleNode;
     }
 }

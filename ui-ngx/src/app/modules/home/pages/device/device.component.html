@@ -1,6 +1,6 @@
 <!--
 
-    Copyright © 2016-2021 The Thingsboard Authors
+    Copyright © 2016-2025 The Thingsboard Authors
 
     Licensed under the Apache License, Version 2.0 (the "License");
     you may not use this file except in compliance with the License.
@@ -15,70 +15,82 @@
     limitations under the License.
 
 -->
-<div class="tb-details-buttons" fxLayout.xs="column">
+<div class="tb-details-buttons xs:flex xs:flex-col">
+  <button mat-raised-button color="primary"
+          [disabled]="(isLoading$ | async)"
+          (click)="onEntityAction($event, 'open')"
+          [class.!hidden]="isEdit || isDetailsPage">
+    {{'common.open-details-page' | translate }}
+  </button>
   <button mat-raised-button color="primary"
           [disabled]="(isLoading$ | async)"
           (click)="onEntityAction($event, 'makePublic')"
-          [fxShow]="!isEdit && deviceScope === 'tenant' && !isAssignedToCustomer(entity) && !entity?.customerIsPublic">
+          [class.!hidden]="isEdit || deviceScope !== 'tenant' || isAssignedToCustomer(entity) || entity?.customerIsPublic">
     {{'device.make-public' | translate }}
   </button>
   <button mat-raised-button color="primary"
           [disabled]="(isLoading$ | async)"
           (click)="onEntityAction($event, 'assignToCustomer')"
-          [fxShow]="!isEdit && deviceScope === 'tenant' && !isAssignedToCustomer(entity)">
+          [class.!hidden]="isEdit || deviceScope !== 'tenant' || isAssignedToCustomer(entity)">
     {{'device.assign-to-customer' | translate }}
   </button>
   <button mat-raised-button color="primary"
           [disabled]="(isLoading$ | async)"
           (click)="onEntityAction($event, 'unassignFromCustomer')"
-          [fxShow]="!isEdit && (deviceScope === 'customer' || deviceScope === 'tenant') && isAssignedToCustomer(entity)">
+          [class.!hidden]="isEdit || (deviceScope !== 'customer' && deviceScope !== 'tenant') || !isAssignedToCustomer(entity)">
     {{ (entity?.customerIsPublic ? 'device.make-private' : 'device.unassign-from-customer') | translate }}
   </button>
   <button mat-raised-button color="primary"
           [disabled]="(isLoading$ | async)"
           (click)="onEntityAction($event, 'manageCredentials')"
-          [fxShow]="!isEdit">
-    {{ (deviceScope === 'customer_user' ? 'device.view-credentials' : 'device.manage-credentials') | translate }}
+          [class.!hidden]="isEdit">
+    {{ ((deviceScope === 'customer_user' || deviceScope === 'edge_customer_user') ? 'device.view-credentials' : 'device.manage-credentials') | translate }}
+  </button>
+  <button mat-raised-button color="primary"
+          [disabled]="(isLoading$ | async)"
+          (click)="onEntityAction($event, 'checkConnectivity')"
+          [class.!hidden]="isEdit">
+    {{ 'device.connectivity.check-connectivity' | translate }}
   </button>
   <button mat-raised-button color="primary"
           [disabled]="(isLoading$ | async)"
           (click)="onEntityAction($event, 'unassignFromEdge')"
-          [fxShow]="!isEdit && deviceScope === 'edge'">
+          [class.!hidden]="isEdit || deviceScope !== 'edge'">
     {{ 'edge.unassign-from-edge' | translate }}
   </button>
-  <button mat-raised-button color="primary" fxFlex.xs
+  <button mat-raised-button color="primary"
           [disabled]="(isLoading$ | async)"
           (click)="onEntityAction($event, 'delete')"
-          [fxShow]="!hideDelete() && !isEdit">
+          [class.!hidden]="hideDelete() || isEdit">
     {{'device.delete' | translate }}
   </button>
-  <div fxLayout="row" fxLayout.xs="column">
+  <div class="flex flex-row xs:flex-col">
     <button mat-raised-button
             ngxClipboard
             (cbOnSuccess)="onDeviceIdCopied($event)"
             [cbContent]="entity?.id?.id"
             [disabled]="(isLoading$ | async)"
-            [fxShow]="!isEdit">
+            [class.!hidden]="isEdit">
       <mat-icon svgIcon="mdi:clipboard-arrow-left"></mat-icon>
       <span translate>device.copyId</span>
     </button>
     <tb-copy-device-credentials
-      [fxShow]="!isEdit"
+      [class.!hidden]="isEdit"
       [disabled]="(isLoading$ | async)"
       [credentials$]="deviceCredentials$"
       [deviceId]="entity?.id">
     </tb-copy-device-credentials>
   </div>
 </div>
-<div class="mat-padding" fxLayout="column">
+<div class="mat-padding flex flex-col">
   <mat-form-field class="mat-block"
-                  [fxShow]="!isEdit && isAssignedToCustomer(entity)
-                              && !entity?.customerIsPublic && deviceScope === 'tenant'">
+                  [class.!hidden]="isEdit || !isAssignedToCustomer(entity)
+                              || entity?.customerIsPublic || deviceScope !== 'tenant'">
     <mat-label translate>device.assignedToCustomer</mat-label>
     <input matInput disabled [ngModel]="entity?.customerTitle">
   </mat-form-field>
   <div class="tb-small" style="padding-bottom: 10px; padding-left: 2px;"
-       [fxShow]="!isEdit && entity?.customerIsPublic && (deviceScope === 'customer' || deviceScope === 'tenant')">
+       [class.!hidden]="isEdit || !entity?.customerIsPublic || (deviceScope !== 'customer' && deviceScope !== 'tenant')">
     {{ 'device.device-public' | translate }}
   </div>
   <form [formGroup]="entityForm">
@@ -89,26 +101,35 @@
         <mat-error *ngIf="entityForm.get('name').hasError('required')">
           {{ 'device.name-required' | translate }}
         </mat-error>
+        <mat-error *ngIf="entityForm.get('name').hasError('maxlength')">
+          {{ 'device.name-max-length' | translate }}
+        </mat-error>
       </mat-form-field>
       <tb-device-profile-autocomplete
         [selectDefaultProfile]="isAdd"
         required
         formControlName="deviceProfileId"
+        [showDetailsPageLink]="true"
         (deviceProfileUpdated)="onDeviceProfileUpdated()"
         (deviceProfileChanged)="onDeviceProfileChanged($event)">
       </tb-device-profile-autocomplete>
       <mat-form-field class="mat-block">
         <mat-label translate>device.label</mat-label>
         <input matInput formControlName="label">
+        <mat-error *ngIf="entityForm.get('label').hasError('maxlength')">
+          {{ 'device.label-max-length' | translate }}
+        </mat-error>
       </mat-form-field>
       <tb-ota-package-autocomplete
         [useFullEntityId]="true"
+        [showDetailsPageLink]="true"
         [type]="otaUpdateType.FIRMWARE"
         [deviceProfileId]="entityForm.get('deviceProfileId').value?.id"
         formControlName="firmwareId">
       </tb-ota-package-autocomplete>
       <tb-ota-package-autocomplete
         [useFullEntityId]="true"
+        [showDetailsPageLink]="true"
         [type]="otaUpdateType.SOFTWARE"
         [deviceProfileId]="entityForm.get('deviceProfileId').value?.id"
         formControlName="softwareId">
@@ -117,15 +138,15 @@
         formControlName="deviceData"
         required>
       </tb-device-data>
-      <div formGroupName="additionalInfo" fxLayout="column">
-        <div fxLayout="row" fxLayout.xs="column" style="padding-bottom: 16px;">
-          <mat-checkbox fxFlex.gt-sm="30" fxFlex formControlName="gateway">
+      <div formGroupName="additionalInfo" class="flex flex-col">
+        <div class="toggle-group">
+          <mat-slide-toggle formControlName="gateway" style="min-width: 165px">
             {{ 'device.is-gateway' | translate }}
-          </mat-checkbox>
-          <mat-checkbox fxFlex *ngIf="entityForm.get('additionalInfo.gateway').value"
-                        formControlName="overwriteActivityTime">
+          </mat-slide-toggle>
+          <mat-slide-toggle *ngIf="entityForm.get('additionalInfo.gateway').value"
+                            formControlName="overwriteActivityTime">
             {{ 'device.overwrite-activity-time' | translate }}
-          </mat-checkbox>
+          </mat-slide-toggle>
         </div>
         <mat-form-field class="mat-block">
           <mat-label translate>device.description</mat-label>

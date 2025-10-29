@@ -1,5 +1,5 @@
 /**
- * Copyright © 2016-2021 The Thingsboard Authors
+ * Copyright © 2016-2025 The Thingsboard Authors
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -16,14 +16,8 @@
 package org.thingsboard.server.transport.mqtt.session;
 
 import io.netty.handler.codec.mqtt.MqttQoS;
-import org.thingsboard.server.common.data.DeviceProfile;
-import org.thingsboard.server.common.data.DeviceTransportType;
-import org.thingsboard.server.common.data.TransportPayloadType;
-import org.thingsboard.server.common.data.device.profile.DeviceProfileTransportConfiguration;
-import org.thingsboard.server.common.data.device.profile.MqttDeviceProfileTransportConfiguration;
+import lombok.ToString;
 import org.thingsboard.server.common.transport.session.DeviceAwareSessionContext;
-import org.thingsboard.server.transport.mqtt.util.MqttTopicFilter;
-import org.thingsboard.server.transport.mqtt.util.MqttTopicFilterFactory;
 
 import java.util.List;
 import java.util.Map;
@@ -34,6 +28,7 @@ import java.util.stream.Collectors;
 /**
  * Created by ashvayka on 30.08.18.
  */
+@ToString(callSuper = true)
 public abstract class MqttDeviceAwareSessionContext extends DeviceAwareSessionContext {
 
     private final ConcurrentMap<MqttTopicMatcher, Integer> mqttQoSMap;

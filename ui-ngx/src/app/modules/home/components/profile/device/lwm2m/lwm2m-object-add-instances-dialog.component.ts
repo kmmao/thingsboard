@@ -1,5 +1,5 @@
 ///
-/// Copyright © 2016-2021 The Thingsboard Authors
+/// Copyright © 2016-2025 The Thingsboard Authors
 ///
 /// Licensed under the Apache License, Version 2.0 (the "License");
 /// you may not use this file except in compliance with the License.
@@ -16,16 +16,16 @@
 
 import { Component, Inject, OnInit } from '@angular/core';
 import { DialogComponent } from '@shared/components/dialog.component';
-import { FormBuilder, FormGroup } from '@angular/forms';
+import { UntypedFormBuilder, UntypedFormGroup } from '@angular/forms';
 import { Store } from '@ngrx/store';
 import { AppState } from '@core/core.state';
 import { Router } from '@angular/router';
 import { MAT_DIALOG_DATA, MatDialogRef } from '@angular/material/dialog';
 
 export interface Lwm2mObjectAddInstancesData {
-  instancesIds: Set<number>;
+  instancesId: Set<number>;
   objectName?: string;
-  objectKeyId?: string;
+  objectId?: number;
 }
 
 @Component({
@@ -35,29 +35,28 @@ export interface Lwm2mObjectAddInstancesData {
 export class Lwm2mObjectAddInstancesDialogComponent extends DialogComponent<Lwm2mObjectAddInstancesDialogComponent, object>
   implements OnInit {
 
-  instancesFormGroup: FormGroup;
+  instancesFormGroup: UntypedFormGroup;
   submitted = false;
 
   constructor(protected store: Store<AppState>,
               protected router: Router,
               @Inject(MAT_DIALOG_DATA) public data: Lwm2mObjectAddInstancesData,
               public dialogRef: MatDialogRef<Lwm2mObjectAddInstancesDialogComponent, object>,
-              public fb: FormBuilder) {
+              public fb: UntypedFormBuilder) {
     super(store, router, dialogRef);
   }
 
   ngOnInit(): void {
     this.instancesFormGroup = this.fb.group({
-      instancesIds: this.data.instancesIds
+      instancesIds: [this.data.instancesId]
     });
   }
 
   cancel(): void {
-    this.dialogRef.close(undefined);
+    this.dialogRef.close(null);
   }
 
   add(): void {
-    this.data.instancesIds = this.instancesFormGroup.get('instancesIds').value;
-    this.dialogRef.close(this.data);
+    this.dialogRef.close(this.instancesFormGroup.get('instancesIds').value);
   }
 }

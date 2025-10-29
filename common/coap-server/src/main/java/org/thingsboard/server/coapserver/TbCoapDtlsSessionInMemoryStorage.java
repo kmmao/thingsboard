@@ -1,5 +1,5 @@
 /**
- * Copyright © 2016-2021 The Thingsboard Authors
+ * Copyright © 2016-2025 The Thingsboard Authors
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -25,7 +25,7 @@ import java.util.concurrent.ConcurrentMap;
 @Data
 public class TbCoapDtlsSessionInMemoryStorage {
 
-    private final ConcurrentMap<String, TbCoapDtlsSessionInfo> dtlsSessionIdMap = new ConcurrentHashMap<>();
+    private final ConcurrentMap<TbCoapDtlsSessionKey, TbCoapDtlsSessionInfo> dtlsSessionsMap = new ConcurrentHashMap<>();
     private long dtlsSessionInactivityTimeout;
     private long dtlsSessionReportTimeout;
 
@@ -35,14 +35,14 @@ public class TbCoapDtlsSessionInMemoryStorage {
         this.dtlsSessionReportTimeout = dtlsSessionReportTimeout;
     }
 
-    public void put(String dtlsSessionId, TbCoapDtlsSessionInfo dtlsSessionInfo) {
-        log.trace("DTLS session added to in-memory store: [{}] timestamp: [{}]", dtlsSessionId, dtlsSessionInfo.getLastActivityTime());
-        dtlsSessionIdMap.putIfAbsent(dtlsSessionId, dtlsSessionInfo);
+    public void put(TbCoapDtlsSessionKey tbCoapDtlsSessionKey, TbCoapDtlsSessionInfo dtlsSessionInfo) {
+        log.trace("DTLS session added to in-memory store: [{}] timestamp: [{}]", tbCoapDtlsSessionKey, dtlsSessionInfo.getLastActivityTime());
+        dtlsSessionsMap.putIfAbsent(tbCoapDtlsSessionKey, dtlsSessionInfo);
     }
 
     public void evictTimeoutSessions() {
         long expTime = System.currentTimeMillis() - dtlsSessionInactivityTimeout;
-        dtlsSessionIdMap.entrySet().removeIf(entry -> {
+        dtlsSessionsMap.entrySet().removeIf(entry -> {
             if (entry.getValue().getLastActivityTime() < expTime) {
                 log.trace("DTLS session was removed from in-memory store: [{}]", entry.getKey());
                 return true;

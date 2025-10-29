@@ -1,5 +1,5 @@
 ///
-/// Copyright © 2016-2021 The Thingsboard Authors
+/// Copyright © 2016-2025 The Thingsboard Authors
 ///
 /// Licensed under the Apache License, Version 2.0 (the "License");
 /// you may not use this file except in compliance with the License.
@@ -17,8 +17,8 @@
 import { ContactBased } from '@shared/models/contact-based.model';
 import { TenantId } from './id/tenant-id';
 import { TenantProfileId } from '@shared/models/id/tenant-profile-id';
-import { BaseData } from '@shared/models/base-data';
-import {Validators} from "@angular/forms";
+import { BaseData, ExportableEntity } from '@shared/models/base-data';
+import { QueueInfo } from '@shared/models/queue.models';
 
 export enum TenantProfileType {
   DEFAULT = 'DEFAULT'
@@ -31,8 +31,10 @@ export interface DefaultTenantProfileConfiguration {
   maxUsers: number;
   maxDashboards: number;
   maxRuleChains: number;
+  maxEdges: number;
   maxResourcesInBytes: number;
   maxOtaPackagesInBytes: number;
+  maxResourceSize: number;
 
   transportTenantMsgRateLimit?: string;
   transportTenantTelemetryMsgRateLimit?: string;
@@ -41,16 +43,68 @@ export interface DefaultTenantProfileConfiguration {
   transportDeviceTelemetryMsgRateLimit?: string;
   transportDeviceTelemetryDataPointsRateLimit?: string;
 
+  transportGatewayMsgRateLimit?: string;
+  transportGatewayTelemetryMsgRateLimit?: string;
+  transportGatewayTelemetryDataPointsRateLimit?: string;
+  transportGatewayDeviceMsgRateLimit?: string;
+  transportGatewayDeviceTelemetryMsgRateLimit?: string;
+  transportGatewayDeviceTelemetryDataPointsRateLimit?: string;
+
+  tenantEntityExportRateLimit?: string;
+  tenantEntityImportRateLimit?: string;
+  tenantNotificationRequestsRateLimit?: string;
+  tenantNotificationRequestsPerRuleRateLimit?: string;
+
   maxTransportMessages: number;
   maxTransportDataPoints: number;
   maxREExecutions: number;
   maxJSExecutions: number;
+  maxTbelExecutions: number;
   maxDPStorageDays: number;
   maxRuleNodeExecutionsPerMessage: number;
   maxEmails: number;
   maxSms: number;
+  smsEnabled: boolean;
+  maxCreatedAlarms: number;
+
+  maxDebugModeDurationMinutes: number;
+
+  tenantServerRestLimitsConfiguration: string;
+  customerServerRestLimitsConfiguration: string;
+
+  maxWsSessionsPerTenant: number;
+  maxWsSessionsPerCustomer: number;
+  maxWsSessionsPerRegularUser: number;
+  maxWsSessionsPerPublicUser: number;
+  wsMsgQueueLimitPerSession: number;
+  maxWsSubscriptionsPerTenant: number;
+  maxWsSubscriptionsPerCustomer: number;
+  maxWsSubscriptionsPerRegularUser: number;
+  maxWsSubscriptionsPerPublicUser: number;
+  wsUpdatesPerSessionRateLimit: string;
+
+  cassandraWriteQueryTenantCoreRateLimits: string;
+  cassandraReadQueryTenantCoreRateLimits: string;
+  cassandraWriteQueryTenantRuleEngineRateLimits: string;
+  cassandraReadQueryTenantRuleEngineRateLimits: string;
+
+  edgeEventRateLimits?: string;
+  edgeEventRateLimitsPerEdge?: string;
+  edgeUplinkMessagesRateLimits?: string;
+  edgeUplinkMessagesRateLimitsPerEdge?: string;
 
   defaultStorageTtlDays: number;
+  alarmsTtlDays: number;
+  rpcTtlDays: number;
+  queueStatsTtlDays: number;
+  ruleEngineExceptionsTtlDays: number;
+
+  maxCalculatedFieldsPerEntity: number;
+  maxArgumentsPerCF: number;
+  maxDataPointsPerRollingArg: number;
+  maxStateSizeInKBytes: number;
+  maxSingleValueArgumentSizeInKBytes: number;
+  calculatedFieldDebugEventsRateLimit: string;
 }
 
 export type TenantProfileConfigurations = DefaultTenantProfileConfiguration;
@@ -71,17 +125,49 @@ export function createTenantProfileConfiguration(type: TenantProfileType): Tenan
           maxUsers: 0,
           maxDashboards: 0,
           maxRuleChains: 0,
+          maxEdges: 0,
           maxResourcesInBytes: 0,
           maxOtaPackagesInBytes: 0,
+          maxResourceSize: 0,
           maxTransportMessages: 0,
           maxTransportDataPoints: 0,
           maxREExecutions: 0,
           maxJSExecutions: 0,
+          maxTbelExecutions: 0,
           maxDPStorageDays: 0,
           maxRuleNodeExecutionsPerMessage: 0,
           maxEmails: 0,
           maxSms: 0,
-          defaultStorageTtlDays: 0
+          smsEnabled: true,
+          maxCreatedAlarms: 0,
+          maxDebugModeDurationMinutes: 15,
+          tenantServerRestLimitsConfiguration: '',
+          customerServerRestLimitsConfiguration: '',
+          maxWsSessionsPerTenant: 0,
+          maxWsSessionsPerCustomer: 0,
+          maxWsSessionsPerRegularUser: 0,
+          maxWsSessionsPerPublicUser: 0,
+          wsMsgQueueLimitPerSession: 0,
+          maxWsSubscriptionsPerTenant: 0,
+          maxWsSubscriptionsPerCustomer: 0,
+          maxWsSubscriptionsPerRegularUser: 0,
+          maxWsSubscriptionsPerPublicUser: 0,
+          wsUpdatesPerSessionRateLimit: '',
+          cassandraWriteQueryTenantCoreRateLimits: '',
+          cassandraReadQueryTenantCoreRateLimits: '',
+          cassandraWriteQueryTenantRuleEngineRateLimits: '',
+          cassandraReadQueryTenantRuleEngineRateLimits: '',
+          defaultStorageTtlDays: 0,
+          alarmsTtlDays: 0,
+          rpcTtlDays: 0,
+          queueStatsTtlDays: 0,
+          ruleEngineExceptionsTtlDays: 0,
+          maxCalculatedFieldsPerEntity: 5,
+          maxArgumentsPerCF: 10,
+          maxDataPointsPerRollingArg: 1000,
+          maxStateSizeInKBytes: 32,
+          maxSingleValueArgumentSizeInKBytes: 2,
+          calculatedFieldDebugEventsRateLimit: ''
         };
         configuration = {...defaultConfiguration, type: TenantProfileType.DEFAULT};
         break;
@@ -92,13 +178,13 @@ export function createTenantProfileConfiguration(type: TenantProfileType): Tenan
 
 export interface TenantProfileData {
   configuration: TenantProfileConfiguration;
+  queueConfiguration?: Array<QueueInfo>;
 }
 
-export interface TenantProfile extends BaseData<TenantProfileId> {
+export interface TenantProfile extends BaseData<TenantProfileId>, ExportableEntity<TenantProfileId> {
   name: string;
   description?: string;
   default?: boolean;
-  isolatedTbCore?: boolean;
   isolatedTbRuleEngine?: boolean;
   profileData?: TenantProfileData;
 }

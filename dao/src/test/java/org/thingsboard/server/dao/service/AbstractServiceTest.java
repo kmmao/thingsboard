@@ -1,5 +1,5 @@
 /**
- * Copyright © 2016-2021 The Thingsboard Authors
+ * Copyright © 2016-2025 The Thingsboard Authors
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -17,7 +17,8 @@ package org.thingsboard.server.dao.service;
 
 import com.datastax.oss.driver.api.core.uuid.Uuids;
 import com.fasterxml.jackson.databind.JsonNode;
-import com.fasterxml.jackson.databind.ObjectMapper;
+import org.junit.After;
+import org.junit.Before;
 import org.junit.runner.RunWith;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.context.annotation.Bean;
@@ -27,53 +28,54 @@ import org.springframework.test.annotation.DirtiesContext;
 import org.springframework.test.context.ContextConfiguration;
 import org.springframework.test.context.junit4.SpringRunner;
 import org.springframework.test.context.support.AnnotationConfigContextLoader;
+import org.thingsboard.common.util.JacksonUtil;
 import org.thingsboard.server.common.data.DeviceProfile;
 import org.thingsboard.server.common.data.DeviceProfileType;
 import org.thingsboard.server.common.data.DeviceTransportType;
 import org.thingsboard.server.common.data.EntityType;
-import org.thingsboard.server.common.data.Event;
+import org.thingsboard.server.common.data.OtaPackage;
+import org.thingsboard.server.common.data.StringUtils;
 import org.thingsboard.server.common.data.Tenant;
+import org.thingsboard.server.common.data.asset.AssetProfile;
 import org.thingsboard.server.common.data.device.profile.DefaultDeviceProfileConfiguration;
 import org.thingsboard.server.common.data.device.profile.DefaultDeviceProfileTransportConfiguration;
 import org.thingsboard.server.common.data.device.profile.DeviceProfileData;
+import org.thingsboard.server.common.data.edge.Edge;
+import org.thingsboard.server.common.data.event.RuleNodeDebugEvent;
+import org.thingsboard.server.common.data.housekeeper.HousekeeperTaskType;
+import org.thingsboard.server.common.data.housekeeper.TenantEntitiesDeletionHousekeeperTask;
+import org.thingsboard.server.common.data.id.DeviceProfileId;
 import org.thingsboard.server.common.data.id.EntityId;
 import org.thingsboard.server.common.data.id.HasId;
 import org.thingsboard.server.common.data.id.TenantId;
-import org.thingsboard.server.dao.alarm.AlarmService;
-import org.thingsboard.server.dao.asset.AssetService;
+import org.thingsboard.server.common.data.oauth2.MapperType;
+import org.thingsboard.server.common.data.oauth2.OAuth2Client;
+import org.thingsboard.server.common.data.oauth2.OAuth2CustomMapperConfig;
+import org.thingsboard.server.common.data.oauth2.OAuth2MapperConfig;
+import org.thingsboard.server.common.data.oauth2.PlatformType;
+import org.thingsboard.server.common.data.ota.ChecksumAlgorithm;
+import org.thingsboard.server.common.data.ota.OtaPackageType;
+import org.thingsboard.server.common.msg.housekeeper.HousekeeperClient;
 import org.thingsboard.server.dao.audit.AuditLogLevelFilter;
 import org.thingsboard.server.dao.audit.AuditLogLevelMask;
-import org.thingsboard.server.dao.component.ComponentDescriptorService;
-import org.thingsboard.server.dao.customer.CustomerService;
-import org.thingsboard.server.dao.dashboard.DashboardService;
-import org.thingsboard.server.dao.device.DeviceCredentialsService;
-import org.thingsboard.server.dao.device.DeviceProfileService;
-import org.thingsboard.server.dao.device.DeviceService;
-import org.thingsboard.server.dao.edge.EdgeEventService;
-import org.thingsboard.server.dao.edge.EdgeService;
-import org.thingsboard.server.dao.entity.EntityService;
-import org.thingsboard.server.dao.entityview.EntityViewService;
-import org.thingsboard.server.dao.event.EventService;
-import org.thingsboard.server.dao.ota.OtaPackageService;
-import org.thingsboard.server.dao.relation.RelationService;
-import org.thingsboard.server.dao.resource.ResourceService;
-import org.thingsboard.server.dao.rule.RuleChainService;
-import org.thingsboard.server.dao.settings.AdminSettingsService;
-import org.thingsboard.server.dao.tenant.TenantProfileService;
+import org.thingsboard.server.dao.audit.AuditLogLevelProperties;
+import org.thingsboard.server.dao.entity.EntityDaoService;
+import org.thingsboard.server.dao.entity.EntityServiceRegistry;
 import org.thingsboard.server.dao.tenant.TenantService;
-import org.thingsboard.server.dao.timeseries.TimeseriesService;
-import org.thingsboard.server.dao.usagerecord.ApiUsageStateService;
-import org.thingsboard.server.dao.user.UserService;
-import org.thingsboard.server.dao.widget.WidgetTypeService;
-import org.thingsboard.server.dao.widget.WidgetsBundleService;
 
 import java.io.IOException;
+import java.io.InputStream;
+import java.nio.ByteBuffer;
+import java.util.Arrays;
+import java.util.Collections;
 import java.util.Comparator;
 import java.util.HashMap;
+import java.util.List;
 import java.util.Map;
+import java.util.Objects;
+import java.util.UUID;
 
 import static org.junit.Assert.assertNotNull;
-
 
 @RunWith(SpringRunner.class)
 @ContextConfiguration(classes = AbstractServiceTest.class, loader = AnnotationConfigContextLoader.class)
@@ -82,84 +84,25 @@ import static org.junit.Assert.assertNotNull;
 @ComponentScan("org.thingsboard.server")
 public abstract class AbstractServiceTest {
 
-    protected ObjectMapper mapper = new ObjectMapper();
-
-    public static final TenantId SYSTEM_TENANT_ID = new TenantId(EntityId.NULL_UUID);
-
-    @Autowired
-    protected UserService userService;
-
-    @Autowired
-    protected ApiUsageStateService apiUsageStateService;
-
-    @Autowired
-    protected AdminSettingsService adminSettingsService;
+    public static final TenantId SYSTEM_TENANT_ID = TenantId.SYS_TENANT_ID;
 
     @Autowired
     protected TenantService tenantService;
 
     @Autowired
-    protected CustomerService customerService;
+    protected EntityServiceRegistry entityServiceRegistry;
 
-    @Autowired
-    protected DeviceService deviceService;
+    protected TenantId tenantId;
 
-    @Autowired
-    protected AssetService assetService;
+    @Before
+    public void beforeAbstractService() {
+        tenantId = createTenant().getId();
+    }
 
-    @Autowired
-    protected EntityViewService entityViewService;
-
-    @Autowired
-    protected EntityService entityService;
-
-    @Autowired
-    protected DeviceCredentialsService deviceCredentialsService;
-
-    @Autowired
-    protected WidgetsBundleService widgetsBundleService;
-
-    @Autowired
-    protected WidgetTypeService widgetTypeService;
-
-    @Autowired
-    protected DashboardService dashboardService;
-
-    @Autowired
-    protected TimeseriesService tsService;
-
-    @Autowired
-    protected EventService eventService;
-
-    @Autowired
-    protected RelationService relationService;
-
-    @Autowired
-    protected AlarmService alarmService;
-
-    @Autowired
-    protected RuleChainService ruleChainService;
-
-    @Autowired
-    protected EdgeService edgeService;
-
-    @Autowired
-    protected EdgeEventService edgeEventService;
-
-    @Autowired
-    private ComponentDescriptorService componentDescriptorService;
-
-    @Autowired
-    protected TenantProfileService tenantProfileService;
-
-    @Autowired
-    protected DeviceProfileService deviceProfileService;
-
-    @Autowired
-    protected ResourceService resourceService;
-
-    @Autowired
-    protected OtaPackageService otaPackageService;
+    @After
+    public void afterAbstractService() {
+        tenantService.deleteTenants();
+    }
 
     public class IdComparator<D extends HasId> implements Comparator<D> {
         @Override
@@ -169,40 +112,27 @@ public abstract class AbstractServiceTest {
     }
 
 
-    protected Event generateEvent(TenantId tenantId, EntityId entityId, String eventType, String eventUid) throws IOException {
-        if (tenantId == null) {
-            tenantId = new TenantId(Uuids.timeBased());
-        }
-        Event event = new Event();
-        event.setTenantId(tenantId);
-        event.setEntityId(entityId);
-        event.setType(eventType);
-        event.setUid(eventUid);
-        event.setBody(readFromResource("TestJsonData.json"));
-        return event;
+    protected RuleNodeDebugEvent generateEvent(TenantId tenantId, EntityId entityId) throws IOException {
+        return generateEvent(tenantId, entityId, null);
     }
-//
-//    private ComponentDescriptor getOrCreateDescriptor(ComponentScope scope, ComponentType type, String clazz, String configurationDescriptorResource) throws IOException {
-//        return getOrCreateDescriptor(scope, type, clazz, configurationDescriptorResource, null);
-//    }
-//
-//    private ComponentDescriptor getOrCreateDescriptor(ComponentScope scope, ComponentType type, String clazz, String configurationDescriptorResource, String actions) throws IOException {
-//        ComponentDescriptor descriptor = componentDescriptorService.findByClazz(clazz);
-//        if (descriptor == null) {
-//            descriptor = new ComponentDescriptor();
-//            descriptor.setName("test");
-//            descriptor.setClazz(clazz);
-//            descriptor.setScope(scope);
-//            descriptor.setType(type);
-//            descriptor.setActions(actions);
-//            descriptor.setConfigurationDescriptor(readFromResource(configurationDescriptorResource));
-//            componentDescriptorService.saveComponent(descriptor);
-//        }
-//        return descriptor;
-//    }
+
+    protected RuleNodeDebugEvent generateEvent(TenantId tenantId, EntityId entityId, String eventType) throws IOException {
+        if (tenantId == null) {
+            tenantId = TenantId.fromUUID(Uuids.timeBased());
+        }
+        return RuleNodeDebugEvent.builder()
+                .tenantId(tenantId)
+                .entityId(entityId.getId())
+                .serviceId("server A")
+                .eventType(eventType)
+                .data(JacksonUtil.toString(readFromResource("TestJsonData.json")))
+                .build();
+    }
 
     public JsonNode readFromResource(String resourceName) throws IOException {
-        return mapper.readTree(this.getClass().getClassLoader().getResourceAsStream(resourceName));
+        try (InputStream is = this.getClass().getClassLoader().getResourceAsStream(resourceName)) {
+            return JacksonUtil.fromBytes(Objects.requireNonNull(is).readAllBytes());
+        }
     }
 
     @Bean
@@ -211,7 +141,19 @@ public abstract class AbstractServiceTest {
         for (EntityType entityType : EntityType.values()) {
             mask.put(entityType.name().toLowerCase(), AuditLogLevelMask.RW.name());
         }
-        return new AuditLogLevelFilter(mask);
+        var props = new AuditLogLevelProperties();
+        props.setMask(mask);
+        return new AuditLogLevelFilter(props);
+    }
+
+    @Bean
+    public HousekeeperClient housekeeperClient() {
+        return task -> {
+            if (task.getTaskType() == HousekeeperTaskType.DELETE_TENANT_ENTITIES) {
+                EntityDaoService entityService = entityServiceRegistry.getServiceByEntityType(((TenantEntitiesDeletionHousekeeperTask) task).getEntityType());
+                entityService.deleteByTenantId(task.getTenantId());
+            }
+        };
     }
 
     protected DeviceProfile createDeviceProfile(TenantId tenantId, String name) {
@@ -232,12 +174,83 @@ public abstract class AbstractServiceTest {
         return deviceProfile;
     }
 
-    public TenantId createTenant() {
+    protected AssetProfile createAssetProfile(TenantId tenantId, String name) {
+        AssetProfile assetProfile = new AssetProfile();
+        assetProfile.setTenantId(tenantId);
+        assetProfile.setName(name);
+        assetProfile.setDescription(name + " Test");
+        assetProfile.setDefault(false);
+        assetProfile.setDefaultRuleChainId(null);
+        return assetProfile;
+    }
+
+    public Tenant createTenant() {
         Tenant tenant = new Tenant();
-        tenant.setTitle("My tenant " + Uuids.timeBased());
+        tenant.setTitle("My tenant " + UUID.randomUUID());
         Tenant savedTenant = tenantService.saveTenant(tenant);
         assertNotNull(savedTenant);
-        return savedTenant.getId();
+        return savedTenant;
+    }
+
+    protected Edge constructEdge(TenantId tenantId, String name, String type) {
+        Edge edge = new Edge();
+        edge.setTenantId(tenantId);
+        edge.setName(name);
+        edge.setType(type);
+        edge.setSecret(StringUtils.randomAlphanumeric(20));
+        edge.setRoutingKey(StringUtils.randomAlphanumeric(20));
+        return edge;
+    }
+
+    protected OtaPackage constructDefaultOtaPackage(TenantId tenantId, DeviceProfileId deviceProfileId) {
+        OtaPackage firmware = new OtaPackage();
+        firmware.setTenantId(tenantId);
+        firmware.setDeviceProfileId(deviceProfileId);
+        firmware.setType(OtaPackageType.FIRMWARE);
+        firmware.setTitle("My firmware");
+        firmware.setVersion("3.3.3");
+        firmware.setFileName("filename.txt");
+        firmware.setContentType("text/plain");
+        firmware.setChecksumAlgorithm(ChecksumAlgorithm.SHA256);
+        firmware.setChecksum("4bf5122f344554c53bde2ebb8cd2b7e3d1600ad631c385a5d7cce23c7785459a");
+        firmware.setData(ByteBuffer.wrap(new byte[]{1}));
+        firmware.setDataSize(1L);
+        return firmware;
+    }
+
+    protected OAuth2Client validClientInfo(TenantId tenantId, String title) {
+        return validClientInfo(tenantId, title, null);
+    }
+
+    protected OAuth2Client validClientInfo(TenantId tenantId, String title, List<PlatformType> platforms) {
+        OAuth2Client oAuth2Client = new OAuth2Client();
+        oAuth2Client.setTenantId(tenantId);
+        oAuth2Client.setTitle(title);
+        oAuth2Client.setClientId(UUID.randomUUID().toString());
+        oAuth2Client.setClientSecret(UUID.randomUUID().toString());
+        oAuth2Client.setAuthorizationUri(UUID.randomUUID().toString());
+        oAuth2Client.setAccessTokenUri(UUID.randomUUID().toString());
+        oAuth2Client.setScope(Arrays.asList(UUID.randomUUID().toString(), UUID.randomUUID().toString()));
+        oAuth2Client.setPlatforms(platforms == null ? Collections.emptyList() : platforms);
+        oAuth2Client.setUserInfoUri(UUID.randomUUID().toString());
+        oAuth2Client.setUserNameAttributeName(UUID.randomUUID().toString());
+        oAuth2Client.setJwkSetUri(UUID.randomUUID().toString());
+        oAuth2Client.setClientAuthenticationMethod(UUID.randomUUID().toString());
+        oAuth2Client.setLoginButtonLabel(UUID.randomUUID().toString());
+        oAuth2Client.setLoginButtonIcon(UUID.randomUUID().toString());
+        oAuth2Client.setAdditionalInfo(JacksonUtil.newObjectNode().put(UUID.randomUUID().toString(), UUID.randomUUID().toString()));
+        oAuth2Client.setMapperConfig(
+                OAuth2MapperConfig.builder()
+                        .allowUserCreation(true)
+                        .activateUser(true)
+                        .type(MapperType.CUSTOM)
+                        .custom(
+                                OAuth2CustomMapperConfig.builder()
+                                        .url(UUID.randomUUID().toString())
+                                        .build()
+                        )
+                        .build());
+        return oAuth2Client;
     }
 
 }

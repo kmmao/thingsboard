@@ -1,5 +1,5 @@
 /**
- * Copyright © 2016-2021 The Thingsboard Authors
+ * Copyright © 2016-2025 The Thingsboard Authors
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -15,24 +15,48 @@
  */
 package org.thingsboard.server.common.data.oauth2;
 
+import com.fasterxml.jackson.annotation.JsonProperty;
+import com.fasterxml.jackson.databind.JsonNode;
+import io.swagger.v3.oas.annotations.media.Schema;
 import lombok.Data;
 import lombok.EqualsAndHashCode;
-import lombok.NoArgsConstructor;
-import lombok.AllArgsConstructor;
+import org.thingsboard.server.common.data.BaseData;
+import org.thingsboard.server.common.data.HasName;
+import org.thingsboard.server.common.data.id.OAuth2ClientId;
 
-@EqualsAndHashCode
+import java.util.List;
+
 @Data
-@NoArgsConstructor
-@AllArgsConstructor
-public class OAuth2ClientInfo {
+@Schema
+@EqualsAndHashCode(callSuper = true)
+public class OAuth2ClientInfo extends BaseData<OAuth2ClientId> implements HasName {
 
-    private String name;
-    private String icon;
-    private String url;
+    @Schema(description = "Oauth2 client registration title (e.g. My google)")
+    private String title;
 
-    public OAuth2ClientInfo(OAuth2ClientInfo oauth2ClientInfo) {
-        this.name = oauth2ClientInfo.getName();
-        this.icon = oauth2ClientInfo.getIcon();
-        this.url = oauth2ClientInfo.getUrl();
+    @Schema(description = "Oauth2 client provider name (e.g. Google)")
+    private String providerName;
+    @Schema(description = "List of platforms for which usage of the OAuth2 client is allowed (empty for all allowed)")
+    private List<PlatformType> platforms;
+
+    public OAuth2ClientInfo() {
+        super();
+    }
+
+    public OAuth2ClientInfo(OAuth2ClientId id) {
+        super(id);
+    }
+
+    public OAuth2ClientInfo(OAuth2Client oAuth2Client) {
+        super(oAuth2Client);
+        this.title = oAuth2Client.getTitle();
+        this.providerName =  oAuth2Client.getAdditionalInfoField("providerName", JsonNode::asText,"");
+        this.platforms = oAuth2Client.getPlatforms();
+    }
+
+    @Override
+    @JsonProperty(access = JsonProperty.Access.READ_ONLY)
+    public String getName() {
+        return title;
     }
 }

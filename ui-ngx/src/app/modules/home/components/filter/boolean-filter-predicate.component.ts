@@ -1,5 +1,5 @@
 ///
-/// Copyright © 2016-2021 The Thingsboard Authors
+/// Copyright © 2016-2025 The Thingsboard Authors
 ///
 /// Licensed under the Apache License, Version 2.0 (the "License");
 /// you may not use this file except in compliance with the License.
@@ -14,11 +14,11 @@
 /// limitations under the License.
 ///
 
-import { Component, forwardRef, Input, OnInit } from '@angular/core';
+import { Component, DestroyRef, forwardRef, Input, OnInit } from '@angular/core';
 import {
   ControlValueAccessor,
-  FormBuilder,
-  FormGroup,
+  UntypedFormBuilder,
+  UntypedFormGroup,
   NG_VALIDATORS,
   NG_VALUE_ACCESSOR,
   ValidationErrors,
@@ -32,6 +32,7 @@ import {
   EntityKeyValueType,
   FilterPredicateType
 } from '@shared/models/query/query.models';
+import { takeUntilDestroyed } from '@angular/core/rxjs-interop';
 
 @Component({
   selector: 'tb-boolean-filter-predicate',
@@ -60,7 +61,7 @@ export class BooleanFilterPredicateComponent implements ControlValueAccessor, Va
 
   valueTypeEnum = EntityKeyValueType;
 
-  booleanFilterPredicateFormGroup: FormGroup;
+  booleanFilterPredicateFormGroup: UntypedFormGroup;
 
   booleanOperations = Object.keys(BooleanOperation);
   booleanOperationEnum = BooleanOperation;
@@ -68,7 +69,8 @@ export class BooleanFilterPredicateComponent implements ControlValueAccessor, Va
 
   private propagateChange = null;
 
-  constructor(private fb: FormBuilder) {
+  constructor(private fb: UntypedFormBuilder,
+              private destroyRef: DestroyRef) {
   }
 
   ngOnInit(): void {
@@ -76,7 +78,9 @@ export class BooleanFilterPredicateComponent implements ControlValueAccessor, Va
       operation: [BooleanOperation.EQUAL, [Validators.required]],
       value: [null, [Validators.required]]
     });
-    this.booleanFilterPredicateFormGroup.valueChanges.subscribe(() => {
+    this.booleanFilterPredicateFormGroup.valueChanges.pipe(
+      takeUntilDestroyed(this.destroyRef)
+    ).subscribe(() => {
       this.updateModel();
     });
   }
@@ -109,8 +113,11 @@ export class BooleanFilterPredicateComponent implements ControlValueAccessor, Va
   }
 
   private updateModel() {
-    const predicate: BooleanFilterPredicate = this.booleanFilterPredicateFormGroup.getRawValue();
-    predicate.type = FilterPredicateType.BOOLEAN;
+    let predicate: BooleanFilterPredicate = null;
+    if (this.booleanFilterPredicateFormGroup.valid) {
+      predicate = this.booleanFilterPredicateFormGroup.getRawValue();
+      predicate.type = FilterPredicateType.BOOLEAN;
+    }
     this.propagateChange(predicate);
   }
 

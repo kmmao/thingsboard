@@ -1,5 +1,5 @@
 /**
- * Copyright © 2016-2021 The Thingsboard Authors
+ * Copyright © 2016-2025 The Thingsboard Authors
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -15,11 +15,11 @@
  */
 package org.thingsboard.edge.rpc;
 
-import org.thingsboard.server.gen.edge.DownlinkMsg;
-import org.thingsboard.server.gen.edge.DownlinkResponseMsg;
-import org.thingsboard.server.gen.edge.EdgeConfiguration;
-import org.thingsboard.server.gen.edge.UplinkMsg;
-import org.thingsboard.server.gen.edge.UplinkResponseMsg;
+import org.thingsboard.server.gen.edge.v1.DownlinkMsg;
+import org.thingsboard.server.gen.edge.v1.DownlinkResponseMsg;
+import org.thingsboard.server.gen.edge.v1.EdgeConfiguration;
+import org.thingsboard.server.gen.edge.v1.UplinkMsg;
+import org.thingsboard.server.gen.edge.v1.UplinkResponseMsg;
 
 import java.util.function.Consumer;
 
@@ -34,9 +34,11 @@ public interface EdgeRpcClient {
 
     void disconnect(boolean onError) throws InterruptedException;
 
-    void sendSyncRequestMsg();
+    void sendSyncRequestMsg(boolean fullSyncRequired);
 
     void sendUplinkMsg(UplinkMsg uplinkMsg);
 
     void sendDownlinkResponseMsg(DownlinkResponseMsg downlinkResponseMsg);
+
+    int getServerMaxInboundMessageSize();
 }

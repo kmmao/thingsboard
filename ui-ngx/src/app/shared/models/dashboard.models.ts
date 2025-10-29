@@ -1,5 +1,5 @@
 ///
-/// Copyright © 2016-2021 The Thingsboard Authors
+/// Copyright © 2016-2025 The Thingsboard Authors
 ///
 /// Licensed under the Apache License, Version 2.0 (the "License");
 /// you may not use this file except in compliance with the License.
@@ -14,7 +14,7 @@
 /// limitations under the License.
 ///
 
-import { BaseData } from '@shared/models/base-data';
+import { BaseData, ExportableEntity } from '@shared/models/base-data';
 import { DashboardId } from '@shared/models/id/dashboard-id';
 import { TenantId } from '@shared/models/id/tenant-id';
 import { ShortCustomerInfo } from '@shared/models/customer.model';
@@ -22,51 +22,135 @@ import { Widget } from './widget.models';
 import { Timewindow } from '@shared/models/time/time.models';
 import { EntityAliases } from './alias.models';
 import { Filters } from '@shared/models/query/query.models';
+import { MatDialogRef } from '@angular/material/dialog';
+import { HasTenantId, HasVersion } from '@shared/models/entity.models';
 
-export interface DashboardInfo extends BaseData<DashboardId> {
+export interface DashboardInfo extends BaseData<DashboardId>, HasTenantId, HasVersion, ExportableEntity<DashboardId> {
   tenantId?: TenantId;
   title?: string;
   image?: string;
   assignedCustomers?: Array<ShortCustomerInfo>;
+  mobileHide?: boolean;
+  mobileOrder?: number;
 }
 
 export interface WidgetLayout {
   sizeX?: number;
   sizeY?: number;
+  desktopHide?: boolean;
+  mobileHide?: boolean;
   mobileHeight?: number;
   mobileOrder?: number;
   col?: number;
   row?: number;
+  resizable?: boolean;
+  preserveAspectRatio?: boolean;
 }
 
 export interface WidgetLayouts {
   [id: string]: WidgetLayout;
 }
 
+export enum LayoutType {
+  default = 'default',
+  scada = 'scada',
+  divider = 'divider',
+}
+
+export const layoutTypes = Object.keys(LayoutType) as LayoutType[];
+
+export const layoutTypeTranslationMap = new Map<LayoutType, string>(
+  [
+    [ LayoutType.default, 'dashboard.layout-type-default' ],
+    [ LayoutType.scada, 'dashboard.layout-type-scada' ],
+    [ LayoutType.divider, 'dashboard.layout-type-divider' ],
+  ]
+);
+
+export enum ViewFormatType {
+  grid = 'grid',
+  list = 'list',
+}
+
+export const viewFormatTypes = Object.keys(ViewFormatType) as ViewFormatType[];
+
+export const viewFormatTypeTranslationMap = new Map<ViewFormatType, string>(
+  [
+    [ ViewFormatType.grid, 'dashboard.view-format-type-grid' ],
+    [ ViewFormatType.list, 'dashboard.view-format-type-list' ],
+  ]
+);
+
 export interface GridSettings {
+  layoutType?: LayoutType;
   backgroundColor?: string;
   columns?: number;
+  minColumns?: number;
   margin?: number;
+  outerMargin?: boolean;
+  viewFormat?: ViewFormatType;
   backgroundSizeMode?: string;
   backgroundImageUrl?: string;
   autoFillHeight?: boolean;
+  rowHeight?: number;
   mobileAutoFillHeight?: boolean;
   mobileRowHeight?: number;
-  [key: string]: any;
+  mobileDisplayLayoutFirst?: boolean;
+  layoutDimension?: LayoutDimension;
 }
 
 export interface DashboardLayout {
   widgets: WidgetLayouts;
   gridSettings: GridSettings;
+  breakpoints?: {[breakpointId in BreakpointId]?: Omit<DashboardLayout, 'breakpoints'>};
 }
 
-export interface DashboardLayoutInfo {
+export declare type DashboardLayoutInfo = {[breakpointId in BreakpointId]?: BreakpointLayoutInfo};
+
+export interface BreakpointLayoutInfo {
   widgetIds?: string[];
   widgetLayouts?: WidgetLayouts;
   gridSettings?: GridSettings;
 }
 
+export declare type BreakpointSystemId = 'default' | 'xs' | 'sm' | 'md' | 'lg' | 'xl';
+export declare type BreakpointId = BreakpointSystemId | string;
+
+export interface BreakpointInfo {
+  id: BreakpointId;
+  maxWidth?: number;
+  minWidth?: number;
+  value?: string;
+}
+
+export const breakpointIdTranslationMap = new Map<BreakpointId, string>([
+  ['default', 'dashboard.breakpoints-id.default'],
+  ['xs', 'dashboard.breakpoints-id.xs'],
+  ['sm', 'dashboard.breakpoints-id.sm'],
+  ['md', 'dashboard.breakpoints-id.md'],
+  ['lg', 'dashboard.breakpoints-id.lg'],
+  ['xl', 'dashboard.breakpoints-id.xl'],
+]);
+
+export const breakpointIdIconMap = new Map<BreakpointId, string>([
+  ['default', 'desktop_windows'],
+  ['xs', 'phone_iphone'],
+  ['sm', 'tablet_mac'],
+  ['md', 'computer'],
+  ['lg', 'monitor'],
+  ['xl', 'desktop_windows'],
+]);
+
+export interface LayoutDimension {
+  type?: LayoutDimensionType;
+  fixedWidth?: number;
+  fixedLayout?: DashboardLayoutId;
+  leftWidthPercentage?: number;
+}
+
 export declare type DashboardLayoutId = 'main' | 'right';
+
+export declare type LayoutDimensionType = 'percentage' | 'fixed';
 
 export declare type DashboardStateLayouts = {[key in DashboardLayoutId]?: DashboardLayout};
 
@@ -94,6 +178,7 @@ export interface DashboardSettings {
   toolbarAlwaysOpen?: boolean;
   hideToolbar?: boolean;
   titleColor?: string;
+  dashboardCss?: string;
 }
 
 export interface DashboardConfiguration {
@@ -108,6 +193,8 @@ export interface DashboardConfiguration {
 
 export interface Dashboard extends DashboardInfo {
   configuration?: DashboardConfiguration;
+  dialogRef?: MatDialogRef<any>;
+  resources?: Array<any>;
 }
 
 export interface HomeDashboard extends Dashboard {
@@ -119,16 +206,20 @@ export interface HomeDashboardInfo {
   hideDashboardToolbar: boolean;
 }
 
-export function isPublicDashboard(dashboard: DashboardInfo): boolean {
+export interface DashboardSetup extends Dashboard {
+  assignedCustomerIds?: Array<string>;
+}
+
+export const isPublicDashboard = (dashboard: DashboardInfo): boolean => {
   if (dashboard && dashboard.assignedCustomers) {
     return dashboard.assignedCustomers
       .filter(customerInfo => customerInfo.public).length > 0;
   } else {
     return false;
   }
-}
+};
 
-export function getDashboardAssignedCustomersText(dashboard: DashboardInfo): string {
+export const getDashboardAssignedCustomersText = (dashboard: DashboardInfo): string => {
   if (dashboard && dashboard.assignedCustomers && dashboard.assignedCustomers.length > 0) {
     return dashboard.assignedCustomers
       .filter(customerInfo => !customerInfo.public)
@@ -137,14 +228,13 @@ export function getDashboardAssignedCustomersText(dashboard: DashboardInfo): str
   } else {
     return '';
   }
-}
+};
 
-export function isCurrentPublicDashboardCustomer(dashboard: DashboardInfo, customerId: string): boolean {
+export const isCurrentPublicDashboardCustomer = (dashboard: DashboardInfo, customerId: string): boolean => {
   if (customerId && dashboard && dashboard.assignedCustomers) {
-    return dashboard.assignedCustomers.filter(customerInfo => {
-      return customerInfo.public && customerId === customerInfo.customerId.id;
-    }).length > 0;
+    return dashboard.assignedCustomers.filter(customerInfo =>
+      customerInfo.public && customerId === customerInfo.customerId.id).length > 0;
   } else {
     return false;
   }
-}
+};

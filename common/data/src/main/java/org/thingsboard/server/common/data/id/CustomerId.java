@@ -1,5 +1,5 @@
 /**
- * Copyright © 2016-2021 The Thingsboard Authors
+ * Copyright © 2016-2025 The Thingsboard Authors
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -15,13 +15,14 @@
  */
 package org.thingsboard.server.common.data.id;
 
-import java.util.UUID;
-
 import com.fasterxml.jackson.annotation.JsonCreator;
-import com.fasterxml.jackson.annotation.JsonIgnore;
 import com.fasterxml.jackson.annotation.JsonProperty;
+import io.swagger.v3.oas.annotations.media.Schema;
 import org.thingsboard.server.common.data.EntityType;
 
+import java.util.UUID;
+
+@Schema
 public final class CustomerId extends UUIDBased implements EntityId {
 
     private static final long serialVersionUID = 1L;
@@ -31,7 +32,7 @@ public final class CustomerId extends UUIDBased implements EntityId {
         super(id);
     }
 
-    @JsonIgnore
+    @Schema(requiredMode = Schema.RequiredMode.REQUIRED, description = "string", example = "CUSTOMER", allowableValues = "CUSTOMER")
     @Override
     public EntityType getEntityType() {
         return EntityType.CUSTOMER;

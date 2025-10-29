@@ -1,5 +1,5 @@
 ///
-/// Copyright © 2016-2021 The Thingsboard Authors
+/// Copyright © 2016-2025 The Thingsboard Authors
 ///
 /// Licensed under the Apache License, Version 2.0 (the "License");
 /// you may not use this file except in compliance with the License.
@@ -16,7 +16,7 @@
 
 import {
   ChangeDetectorRef,
-  Component,
+  Component, HostBinding,
   Injector,
   Input,
   OnDestroy,
@@ -46,6 +46,9 @@ import { AliasFilterType } from '@shared/models/alias.models';
   styleUrls: ['./aliases-entity-select.component.scss']
 })
 export class AliasesEntitySelectComponent implements OnInit, OnDestroy {
+
+  @HostBinding('class')
+  aliasesEntitySelectClass = 'tb-hide';
 
   aliasControllerValue: IAliasController;
 
@@ -90,6 +93,7 @@ export class AliasesEntitySelectComponent implements OnInit, OnDestroy {
           setTimeout(() => {
             this.updateDisplayValue();
             this.updateEntityAliasesInfo();
+            this.cd.detectChanges();
           }, 0);
         }
       ));
@@ -98,6 +102,7 @@ export class AliasesEntitySelectComponent implements OnInit, OnDestroy {
           setTimeout(() => {
             this.updateDisplayValue();
             this.updateEntityAliasesInfo();
+            this.cd.detectChanges();
           }, 0);
         }
       ));
@@ -181,19 +186,20 @@ export class AliasesEntitySelectComponent implements OnInit, OnDestroy {
       displayValue = this.translate.instant('entity.entities');
     }
     this.displayValue = displayValue;
-    this.cd.detectChanges();
   }
 
   private updateEntityAliasesInfo() {
     const allEntityAliases = this.aliasController.getEntityAliases();
     this.entityAliasesInfo = {};
     this.hasSelectableAliasEntities = false;
+    this.aliasesEntitySelectClass = 'tb-hide';
     for (const aliasId of Object.keys(allEntityAliases)) {
       const aliasInfo = this.aliasController.getInstantAliasInfo(aliasId);
       if (aliasInfo && !aliasInfo.resolveMultiple && aliasInfo.currentEntity
         && aliasInfo.entityFilter && aliasInfo.entityFilter.type !== AliasFilterType.singleEntity) {
         this.entityAliasesInfo[aliasId] = deepClone(aliasInfo);
         this.hasSelectableAliasEntities = true;
+        this.aliasesEntitySelectClass = '';
       }
     }
   }

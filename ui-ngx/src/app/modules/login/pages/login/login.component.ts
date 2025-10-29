@@ -1,5 +1,5 @@
 ///
-/// Copyright © 2016-2021 The Thingsboard Authors
+/// Copyright © 2016-2025 The Thingsboard Authors
 ///
 /// Licensed under the Apache License, Version 2.0 (the "License");
 /// you may not use this file except in compliance with the License.
@@ -19,11 +19,11 @@ import { AuthService } from '@core/auth/auth.service';
 import { Store } from '@ngrx/store';
 import { AppState } from '@core/core.state';
 import { PageComponent } from '@shared/components/page.component';
-import { FormBuilder } from '@angular/forms';
+import { UntypedFormBuilder } from '@angular/forms';
 import { HttpErrorResponse } from '@angular/common/http';
 import { Constants } from '@shared/models/constants';
 import { Router } from '@angular/router';
-import { OAuth2ClientInfo } from '@shared/models/oauth2.models';
+import { OAuth2ClientLoginInfo } from '@shared/models/oauth2.models';
 
 @Component({
   selector: 'tb-login',
@@ -32,16 +32,17 @@ import { OAuth2ClientInfo } from '@shared/models/oauth2.models';
 })
 export class LoginComponent extends PageComponent implements OnInit {
 
+  passwordViolation = false;
+
   loginFormGroup = this.fb.group({
     username: '',
     password: ''
   });
-  oauth2Clients: Array<OAuth2ClientInfo> = null;
-  hidePassword = true;
-  
+  oauth2Clients: Array<OAuth2ClientLoginInfo> = null;
+
   constructor(protected store: Store<AppState>,
               private authService: AuthService,
-              public fb: FormBuilder,
+              public fb: UntypedFormBuilder,
               private router: Router) {
     super(store);
   }
@@ -58,6 +59,8 @@ export class LoginComponent extends PageComponent implements OnInit {
           if (error && error.error && error.error.errorCode) {
             if (error.error.errorCode === Constants.serverErrorCode.credentialsExpired) {
               this.router.navigateByUrl(`login/resetExpiredPassword?resetToken=${error.error.resetToken}`);
+            } else if (error.error.errorCode === Constants.serverErrorCode.passwordViolation) {
+              this.passwordViolation = true;
             }
           }
         }
@@ -70,4 +73,11 @@ export class LoginComponent extends PageComponent implements OnInit {
     }
   }
 
+  getOAuth2Uri(oauth2Client: OAuth2ClientLoginInfo): string {
+    let result = "";
+    if (this.authService.redirectUrl) {
+      result += "?prevUri=" + this.authService.redirectUrl;
+    }
+    return oauth2Client.url + result;
+  }
 }

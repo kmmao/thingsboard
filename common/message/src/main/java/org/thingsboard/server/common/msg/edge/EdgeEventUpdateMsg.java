@@ -1,5 +1,5 @@
 /**
- * Copyright © 2016-2021 The Thingsboard Authors
+ * Copyright © 2016-2025 The Thingsboard Authors
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -15,28 +15,25 @@
  */
 package org.thingsboard.server.common.msg.edge;
 
-import lombok.Getter;
-import lombok.ToString;
+import lombok.Data;
 import org.thingsboard.server.common.data.id.EdgeId;
 import org.thingsboard.server.common.data.id.TenantId;
 import org.thingsboard.server.common.msg.MsgType;
-import org.thingsboard.server.common.msg.aware.TenantAwareMsg;
-import org.thingsboard.server.common.msg.cluster.ToAllNodesMsg;
 
-@ToString
-public class EdgeEventUpdateMsg implements TenantAwareMsg, ToAllNodesMsg {
-    @Getter
+import java.io.Serial;
+
+@Data
+public class EdgeEventUpdateMsg implements EdgeSessionMsg {
+
+    @Serial
+    private static final long serialVersionUID = -8050114506822836537L;
+
     private final TenantId tenantId;
-    @Getter
     private final EdgeId edgeId;
-
-    public EdgeEventUpdateMsg(TenantId tenantId, EdgeId edgeId) {
-        this.tenantId = tenantId;
-        this.edgeId = edgeId;
-    }
 
     @Override
     public MsgType getMsgType() {
         return MsgType.EDGE_EVENT_UPDATE_TO_EDGE_SESSION_MSG;
     }
+
 }

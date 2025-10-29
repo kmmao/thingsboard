@@ -1,5 +1,5 @@
 /**
- * Copyright © 2016-2021 The Thingsboard Authors
+ * Copyright © 2016-2025 The Thingsboard Authors
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -16,33 +16,51 @@
 package org.thingsboard.server.common.data;
 
 import com.fasterxml.jackson.annotation.JsonIgnore;
+import com.fasterxml.jackson.annotation.JsonProperty;
 import com.fasterxml.jackson.core.JsonProcessingException;
+import com.fasterxml.jackson.databind.ObjectMapper;
+import io.swagger.v3.oas.annotations.media.Schema;
+import jakarta.validation.Valid;
 import lombok.Data;
 import lombok.EqualsAndHashCode;
+import lombok.ToString;
 import lombok.extern.slf4j.Slf4j;
 import org.thingsboard.server.common.data.id.TenantProfileId;
 import org.thingsboard.server.common.data.tenant.profile.DefaultTenantProfileConfiguration;
 import org.thingsboard.server.common.data.tenant.profile.TenantProfileData;
+import org.thingsboard.server.common.data.validation.Length;
 import org.thingsboard.server.common.data.validation.NoXss;
 
 import java.io.ByteArrayInputStream;
 import java.io.IOException;
 import java.util.Optional;
 
-import static org.thingsboard.server.common.data.SearchTextBasedWithAdditionalInfo.mapper;
-
+@Schema
 @Data
+@ToString(exclude = {"profileDataBytes"})
 @EqualsAndHashCode(callSuper = true)
 @Slf4j
-public class TenantProfile extends SearchTextBased<TenantProfileId> implements HasName {
+public class TenantProfile extends BaseData<TenantProfileId> implements HasName {
+
+    private static final long serialVersionUID = 3021989561267192281L;
+
+    public static final ObjectMapper mapper = new ObjectMapper();
 
     @NoXss
+    @Length(fieldName = "name")
+    @Schema(description = "Name of the tenant profile", example = "High Priority Tenants")
     private String name;
     @NoXss
+    @Schema(description = "Description of the tenant profile", example = "Any text")
     private String description;
+    @Schema(description = "Default Tenant profile to be used.", example = "false")
+    @JsonProperty("default")
     private boolean isDefault;
-    private boolean isolatedTbCore;
+    @Schema(description = "If enabled, will push all messages related to this tenant and processed by the rule engine into separate queue. " +
+            "Useful for complex microservices deployments, to isolate processing of the data for specific tenants", example = "false")
     private boolean isolatedTbRuleEngine;
+    @Valid
+    @Schema(description = "Complex JSON object that contains profile settings: queue configs, max devices, max assets, rate limits, etc.")
     private transient TenantProfileData profileData;
     @JsonIgnore
     private byte[] profileDataBytes;
@@ -60,14 +78,23 @@ public class TenantProfile extends SearchTextBased<TenantProfileId> implements H
         this.name = tenantProfile.getName();
         this.description = tenantProfile.getDescription();
         this.isDefault = tenantProfile.isDefault();
-        this.isolatedTbCore = tenantProfile.isIsolatedTbCore();
         this.isolatedTbRuleEngine = tenantProfile.isIsolatedTbRuleEngine();
         this.setProfileData(tenantProfile.getProfileData());
     }
 
+    @Schema(description = "JSON object with the tenant profile Id. " +
+            "Specify this field to update the tenant profile. " +
+            "Referencing non-existing tenant profile Id will cause error. " +
+            "Omit this field to create new tenant profile.")
     @Override
-    public String getSearchText() {
-        return getName();
+    public TenantProfileId getId() {
+        return super.getId();
+    }
+
+    @Schema(description = "Timestamp of the tenant profile creation, in milliseconds", example = "1609459200000", accessMode = Schema.AccessMode.READ_ONLY)
+    @Override
+    public long getCreatedTime() {
+        return super.getCreatedTime();
     }
 
     @Override
@@ -100,9 +127,15 @@ public class TenantProfile extends SearchTextBased<TenantProfileId> implements H
                 .map(profileConfiguration -> (DefaultTenantProfileConfiguration) profileConfiguration);
     }
 
+    @JsonIgnore
+    public DefaultTenantProfileConfiguration getDefaultProfileConfiguration() {
+        return getProfileConfiguration().orElse(null);
+    }
+
     public TenantProfileData createDefaultTenantProfileData() {
         TenantProfileData tpd = new TenantProfileData();
         tpd.setConfiguration(new DefaultTenantProfileConfiguration());
+        this.profileData = tpd;
         return tpd;
     }
 

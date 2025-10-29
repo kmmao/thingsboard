@@ -1,5 +1,5 @@
 ///
-/// Copyright © 2016-2021 The Thingsboard Authors
+/// Copyright © 2016-2025 The Thingsboard Authors
 ///
 /// Licensed under the Apache License, Version 2.0 (the "License");
 /// you may not use this file except in compliance with the License.
@@ -18,8 +18,8 @@ import { Component } from '@angular/core';
 import { Store } from '@ngrx/store';
 import { AppState } from '@core/core.state';
 import { EntityTableHeaderComponent } from '../../components/entity/entity-table-header.component';
-import { EdgeEvent } from "@shared/models/edge.models";
-import { EdgeDownlinkTableConfig } from "@home/components/edge/edge-downlink-table-config";
+import { EdgeEvent } from '@shared/models/edge.models';
+import { EdgeDownlinkTableConfig } from '@home/components/edge/edge-downlink-table-config';
 
 @Component({
   selector: 'tb-edge-downlink-table-header',
@@ -34,9 +34,5 @@ export class EdgeDownlinkTableHeaderComponent extends EntityTableHeaderComponent
 
   constructor(protected store: Store<AppState>) {
     super(store);
-  }
-
-  eventTypeChanged() {
-    this.eventTableConfig.table.resetSortAndFilter(true, true);
   }
 }

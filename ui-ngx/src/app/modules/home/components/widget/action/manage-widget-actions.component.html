@@ -1,6 +1,6 @@
 <!--
 
-    Copyright © 2016-2021 The Thingsboard Authors
+    Copyright © 2016-2025 The Thingsboard Authors
 
     Licensed under the Apache License, Version 2.0 (the "License");
     you may not use this file except in compliance with the License.
@@ -15,12 +15,12 @@
     limitations under the License.
 
 -->
-<div class="mat-padding tb-entity-table tb-absolute-fill">
-  <div fxFlex fxLayout="column" class="mat-elevation-z1 tb-entity-table-content">
-    <mat-toolbar class="mat-table-toolbar" [fxShow]="!textSearchMode">
+<div class="tb-entity-table tb-absolute-fill">
+  <div class="tb-entity-table-content flex flex-1 flex-col">
+    <mat-toolbar class="mat-mdc-table-toolbar" [class.!hidden]="textSearchMode">
       <div class="mat-toolbar-tools">
         <span class="tb-entity-table-title" translate>widget-config.actions</span>
-        <span fxFlex></span>
+        <span class="flex-1"></span>
         <button mat-icon-button [disabled]="isLoading$ | async"
                 type="button"
                 (click)="addAction($event)"
@@ -36,7 +36,7 @@
         </button>
       </div>
     </mat-toolbar>
-    <mat-toolbar class="mat-table-toolbar" [fxShow]="textSearchMode">
+    <mat-toolbar class="mat-mdc-table-toolbar" [class.!hidden]="!textSearchMode">
       <div class="mat-toolbar-tools">
         <button mat-icon-button
                 type="button"
@@ -44,7 +44,7 @@
                 matTooltipPosition="above">
           <mat-icon>search</mat-icon>
         </button>
-        <mat-form-field fxFlex>
+        <mat-form-field class="flex-1">
           <mat-label>&nbsp;</mat-label>
           <input #searchInput matInput
                  [(ngModel)]="pageLink.textSearch"
@@ -58,30 +58,50 @@
         </button>
       </div>
     </mat-toolbar>
-    <div fxFlex class="table-container">
-      <table mat-table [dataSource]="dataSource"
-                 matSort [matSortActive]="pageLink.sortOrder.property" [matSortDirection]="pageLink.sortDirection()" matSortDisableClear>
+    <div class="table-container flex-1">
+      <table mat-table
+             [dataSource]="dataSource"
+             matSort [matSortActive]="pageLink.sortOrder.property" [matSortDirection]="pageLink.sortDirection()" matSortDisableClear
+             cdkDropList cdkDropListOrientation="vertical"
+             [cdkDropListData]="dataSource"
+             (cdkDropListDropped)="dropAction($event)"
+             [cdkDropListDisabled]="dragDisabled"
+             class="tb-drop-list">
+        <ng-container matColumnDef="actionSourceId">
+          <mat-header-cell *matHeaderCellDef style="width: 36px"></mat-header-cell>
+          <mat-cell *matCellDef="let action" class="tb-icon-cell">
+            <div cdkDragHandle
+                 class="tb-drag-handle"
+                 style="min-width: 36px"
+                 (mousedown)="dragDisabled = false"
+                 (mouseup)="dragDisabled = true"
+                 matTooltip="{{ 'action.drag' | translate }}"
+                 matTooltipPosition="above">
+              <mat-icon>drag_handle</mat-icon>
+            </div>
+          </mat-cell>
+        </ng-container>
         <ng-container matColumnDef="actionSourceName">
           <mat-header-cell *matHeaderCellDef mat-sort-header style="width: 20%"> {{ 'widget-config.action-source' | translate }} </mat-header-cell>
-          <mat-cell *matCellDef="let action">
+          <mat-cell *matCellDef="let action" style="width: 20%">
             {{ action.actionSourceName }}
           </mat-cell>
         </ng-container>
         <ng-container matColumnDef="name">
-          <mat-header-cell *matHeaderCellDef mat-sort-header style="width: 30%"> {{ 'widget-config.action-name' | translate }} </mat-header-cell>
-          <mat-cell *matCellDef="let action">
+          <mat-header-cell *matHeaderCellDef style="width: 30%"> {{ 'widget-config.action-name' | translate }} </mat-header-cell>
+          <mat-cell *matCellDef="let action" style="width: 30%">
             {{ action.name }}
           </mat-cell>
         </ng-container>
         <ng-container matColumnDef="icon">
-          <mat-header-cell *matHeaderCellDef mat-sort-header style="width: 40px"> {{ 'widget-config.action-icon' | translate }} </mat-header-cell>
-          <mat-cell *matCellDef="let action">
-            <mat-icon>{{ action.icon }}</mat-icon>
+          <mat-header-cell *matHeaderCellDef style="width: 40px"> {{ 'widget-config.action-icon' | translate }} </mat-header-cell>
+          <mat-cell *matCellDef="let action" class="tb-icon-cell" style="width: 40px">
+            <tb-icon>{{ action.icon }}</tb-icon>
           </mat-cell>
         </ng-container>
         <ng-container matColumnDef="typeName">
-          <mat-header-cell *matHeaderCellDef mat-sort-header style="width: 50%"> {{ 'widget-config.action-type' | translate }} </mat-header-cell>
-          <mat-cell *matCellDef="let action">
+          <mat-header-cell *matHeaderCellDef style="width: 50%"> {{ 'widget-config.action-type' | translate }} </mat-header-cell>
+          <mat-cell *matCellDef="let action" style="width: 50%">
             {{ action.typeName }}
           </mat-cell>
         </ng-container>
@@ -89,7 +109,7 @@
           <mat-header-cell *matHeaderCellDef style="min-width: 80px; max-width: 80px; width: 80px">
           </mat-header-cell>
           <mat-cell *matCellDef="let action">
-            <div fxFlex fxLayout="row" fxLayoutAlign="end">
+            <div class="flex flex-1 flex-row items-stretch justify-end">
               <button mat-icon-button [disabled]="isLoading$ | async"
                       type="button"
                       matTooltip="{{ 'widget-config.edit-action' | translate }}"
@@ -107,18 +127,19 @@
             </div>
           </mat-cell>
         </ng-container>
-        <mat-header-row [ngClass]="{'mat-row-select': true}" *matHeaderRowDef="displayedColumns; sticky: true"></mat-header-row>
-        <mat-row [ngClass]="{'mat-row-select': true}"
-                 *matRowDef="let action; columns: displayedColumns;"></mat-row>
+        <mat-header-row class="mat-row-select" *matHeaderRowDef="displayedColumns; sticky: true"></mat-header-row>
+        <mat-row class="mat-row-select tb-draggable"
+                 *matRowDef="let action; columns: displayedColumns;"
+                 cdkDrag [cdkDragData]="action"></mat-row>
       </table>
-      <span [fxShow]="dataSource.isEmpty() | async"
-            fxLayoutAlign="center center"
-            class="no-data-found" translate>{{ 'widget-config.no-actions-text' }}</span>
+      <span [class.!hidden]="(dataSource.isEmpty() | async) === false"
+            class="no-data-found flex items-center justify-center" translate>{{ 'widget-config.no-actions-text' }}</span>
     </div>
     <mat-divider></mat-divider>
     <mat-paginator [length]="dataSource.total() | async"
                    [pageIndex]="pageLink.page"
                    [pageSize]="pageLink.pageSize"
-                   [pageSizeOptions]="[10, 20, 30]"></mat-paginator>
+                   [pageSizeOptions]="[10, 20, 30]"
+                   [hidePageSize]="hidePageSize"></mat-paginator>
   </div>
 </div>

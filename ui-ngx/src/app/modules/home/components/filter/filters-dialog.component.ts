@@ -1,5 +1,5 @@
 ///
-/// Copyright © 2016-2021 The Thingsboard Authors
+/// Copyright © 2016-2025 The Thingsboard Authors
 ///
 /// Licensed under the Apache License, Version 2.0 (the "License");
 /// you may not use this file except in compliance with the License.
@@ -14,19 +14,19 @@
 /// limitations under the License.
 ///
 
-import { Component, Inject, OnInit, SkipSelf } from '@angular/core';
+import { Component, Inject, SkipSelf } from '@angular/core';
 import { ErrorStateMatcher } from '@angular/material/core';
 import { MAT_DIALOG_DATA, MatDialog, MatDialogRef } from '@angular/material/dialog';
 import { Store } from '@ngrx/store';
 import { AppState } from '@core/core.state';
 import {
   AbstractControl,
-  FormArray,
-  FormBuilder,
-  FormControl,
-  FormGroup,
   FormGroupDirective,
   NgForm,
+  UntypedFormArray,
+  UntypedFormBuilder,
+  UntypedFormControl,
+  UntypedFormGroup,
   Validators
 } from '@angular/forms';
 import { Router } from '@angular/router';
@@ -39,6 +39,7 @@ import { DialogService } from '@core/services/dialog.service';
 import { deepClone, isUndefined } from '@core/utils';
 import { Filter, Filters, KeyFilterInfo } from '@shared/models/query/query.models';
 import { FilterDialogComponent, FilterDialogData } from '@home/components/filter/filter-dialog.component';
+import { DashboardUtilsService } from '@core/services/dashboard-utils.service';
 
 export interface FiltersDialogData {
   filters: Filters;
@@ -57,14 +58,16 @@ export interface FiltersDialogData {
   styleUrls: ['./filters-dialog.component.scss']
 })
 export class FiltersDialogComponent extends DialogComponent<FiltersDialogComponent, Filters>
-  implements OnInit, ErrorStateMatcher {
+  implements ErrorStateMatcher {
 
   title: string;
   disableAdd: boolean;
 
   filterToWidgetsMap: {[filterId: string]: Array<string>} = {};
 
-  filtersFormGroup: FormGroup;
+  filterNames: Set<string> = new Set<string>();
+
+  filtersFormGroup: UntypedFormGroup;
 
   submitted = false;
 
@@ -73,8 +76,9 @@ export class FiltersDialogComponent extends DialogComponent<FiltersDialogCompone
               @Inject(MAT_DIALOG_DATA) public data: FiltersDialogData,
               @SkipSelf() private errorStateMatcher: ErrorStateMatcher,
               public dialogRef: MatDialogRef<FiltersDialogComponent, Filters>,
-              private fb: FormBuilder,
+              private fb: UntypedFormBuilder,
               private utils: UtilsService,
+              private dashboardUtils: DashboardUtilsService,
               private translate: TranslateService,
               private dialogs: DialogService,
               private dialog: MatDialog) {
@@ -92,15 +96,16 @@ export class FiltersDialogComponent extends DialogComponent<FiltersDialogCompone
         }
       } else {
         this.data.widgets.forEach((widget) => {
-          const datasources = this.utils.validateDatasources(widget.config.datasources);
-          datasources.forEach((datasource) => {
-            if (datasource.type === DatasourceType.entity && datasource.filterId) {
+          this.dashboardUtils.getWidgetDatasources(widget).forEach((datasource) => {
+            if (datasource.type !== DatasourceType.function && datasource.filterId) {
               widgetsTitleList = this.filterToWidgetsMap[datasource.filterId];
               if (!widgetsTitleList) {
                 widgetsTitleList = [];
                 this.filterToWidgetsMap[datasource.filterId] = widgetsTitleList;
               }
-              widgetsTitleList.push(widget.config.title);
+              if (!widgetsTitleList.includes(widget.config.title)) {
+                widgetsTitleList.push(widget.config.title);
+              }
             }
           });
         });
@@ -112,6 +117,7 @@ export class FiltersDialogComponent extends DialogComponent<FiltersDialogCompone
       if (isUndefined(filter.editable)) {
         filter.editable = true;
       }
+      this.filterNames.add(filter.filter);
       filterControls.push(this.createFilterFormControl(filterId, filter));
     }
 
@@ -131,14 +137,11 @@ export class FiltersDialogComponent extends DialogComponent<FiltersDialogCompone
   }
 
 
-  filtersFormArray(): FormArray {
-    return this.filtersFormGroup.get('filters') as FormArray;
+  filtersFormArray(): UntypedFormArray {
+    return this.filtersFormGroup.get('filters') as UntypedFormArray;
   }
 
-  ngOnInit(): void {
-  }
-
-  isErrorState(control: FormControl | null, form: FormGroupDirective | NgForm | null): boolean {
+  isErrorState(control: UntypedFormControl | null, form: FormGroupDirective | NgForm | null): boolean {
     const originalErrorState = this.errorStateMatcher.isErrorState(control, form);
     const customErrorState = !!(control && control.invalid && this.submitted);
     return originalErrorState || customErrorState;
@@ -157,8 +160,35 @@ export class FiltersDialogComponent extends DialogComponent<FiltersDialogCompone
       this.dialogs.alert(this.translate.instant('filter.unable-delete-filter-title'),
         message, this.translate.instant('action.close'), true);
     } else {
-      (this.filtersFormGroup.get('filters') as FormArray).removeAt(index);
+      (this.filtersFormGroup.get('filters') as UntypedFormArray).removeAt(index);
+      this.filterNames.delete(filter.filter);
       this.filtersFormGroup.markAsDirty();
+    }
+  }
+
+  private getNextDuplicatedName(filterName: string): string {
+    const suffix = ` - ${this.translate.instant('action.copy')} `;
+    let counter = 0;
+    while (++counter < Number.MAX_SAFE_INTEGER) {
+      const newName = `${filterName}${suffix}${counter}`;
+      if (!this.filterNames.has(newName)) {
+        return newName;
+      }
+    }
+
+    return null;
+  }
+
+  duplicateFilter(index: number) {
+    const originalFilter = (this.filtersFormGroup.get('filters').value as any[])[index];
+    const newFilterName = this.getNextDuplicatedName(originalFilter.filter);
+    if (newFilterName) {
+      const duplicatedFilter = deepClone(originalFilter);
+      duplicatedFilter.id = this.utils.guid();
+      duplicatedFilter.filter = newFilterName;
+      (this.filtersFormGroup.get('filters') as UntypedFormArray).
+        insert(index + 1, this.createFilterFormControl(duplicatedFilter.id, duplicatedFilter));
+      this.filterNames.add(duplicatedFilter.filter);
     }
   }
 
@@ -176,6 +206,7 @@ export class FiltersDialogComponent extends DialogComponent<FiltersDialogCompone
     const filtersArray = this.filtersFormGroup.get('filters').value as any[];
     if (!isAdd) {
       filter = filtersArray[index];
+      this.filterNames.delete(filter.filter);
     }
     this.dialog.open<FilterDialogComponent, FilterDialogData,
       Filter>(FilterDialogComponent, {
@@ -189,14 +220,15 @@ export class FiltersDialogComponent extends DialogComponent<FiltersDialogCompone
     }).afterClosed().subscribe((result) => {
       if (result) {
         if (isAdd) {
-          (this.filtersFormGroup.get('filters') as FormArray)
+          (this.filtersFormGroup.get('filters') as UntypedFormArray)
             .push(this.createFilterFormControl(result.id, result));
         } else {
-          const filterFormControl = (this.filtersFormGroup.get('filters') as FormArray).at(index);
+          const filterFormControl = (this.filtersFormGroup.get('filters') as UntypedFormArray).at(index);
           filterFormControl.get('filter').patchValue(result.filter);
           filterFormControl.get('editable').patchValue(result.editable);
           filterFormControl.get('keyFilters').patchValue(result.keyFilters);
         }
+        this.filterNames.add(result.filter);
         this.filtersFormGroup.markAsDirty();
       }
     });

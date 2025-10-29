@@ -1,5 +1,5 @@
 /**
- * Copyright © 2016-2021 The Thingsboard Authors
+ * Copyright © 2016-2025 The Thingsboard Authors
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -15,26 +15,32 @@
  */
 package org.thingsboard.server.dao.sql.user;
 
+import org.springframework.data.domain.Limit;
 import org.springframework.data.domain.Page;
 import org.springframework.data.domain.Pageable;
+import org.springframework.data.jpa.repository.JpaRepository;
 import org.springframework.data.jpa.repository.Query;
-import org.springframework.data.repository.PagingAndSortingRepository;
 import org.springframework.data.repository.query.Param;
+import org.thingsboard.server.common.data.edqs.fields.UserFields;
 import org.thingsboard.server.common.data.security.Authority;
 import org.thingsboard.server.dao.model.sql.UserEntity;
 
+import java.util.Collection;
+import java.util.List;
 import java.util.UUID;
 
 /**
  * @author Valerii Sosliuk
  */
-public interface UserRepository extends PagingAndSortingRepository<UserEntity, UUID> {
+public interface UserRepository extends JpaRepository<UserEntity, UUID> {
 
     UserEntity findByEmail(String email);
 
+    UserEntity findByTenantIdAndEmail(UUID tenantId, String email);
+
     @Query("SELECT u FROM UserEntity u WHERE u.tenantId = :tenantId " +
             "AND u.customerId = :customerId AND u.authority = :authority " +
-            "AND LOWER(u.searchText) LIKE LOWER(CONCAT(:searchText, '%'))")
+            "AND (:searchText IS NULL OR ilike(u.email, CONCAT('%', :searchText, '%')) = true)")
     Page<UserEntity> findUsersByAuthority(@Param("tenantId") UUID tenantId,
                                           @Param("customerId") UUID customerId,
                                           @Param("searchText") String searchText,
@@ -42,10 +48,34 @@ public interface UserRepository extends PagingAndSortingRepository<UserEntity, U
                                           Pageable pageable);
 
     @Query("SELECT u FROM UserEntity u WHERE u.tenantId = :tenantId " +
-            "AND LOWER(u.searchText) LIKE LOWER(CONCAT(:searchText, '%'))")
+            "AND u.customerId IN (:customerIds) " +
+            "AND (:searchText IS NULL OR ilike(u.email, CONCAT('%', :searchText, '%')) = true)")
+    Page<UserEntity> findTenantAndCustomerUsers(@Param("tenantId") UUID tenantId,
+                                                @Param("customerIds") Collection<UUID> customerIds,
+                                                @Param("searchText") String searchText,
+                                                Pageable pageable);
+
+    @Query("SELECT u FROM UserEntity u WHERE u.tenantId = :tenantId " +
+            "AND (:searchText IS NULL OR ilike(u.email, CONCAT('%', :searchText, '%')) = true)")
     Page<UserEntity> findByTenantId(@Param("tenantId") UUID tenantId,
                                     @Param("searchText") String searchText,
                                     Pageable pageable);
 
+    Page<UserEntity> findAllByAuthority(Authority authority, Pageable pageable);
+
+    Page<UserEntity> findByAuthorityAndTenantIdIn(Authority authority, Collection<UUID> tenantsIds, Pageable pageable);
+
+    @Query("SELECT u FROM UserEntity u INNER JOIN TenantEntity t ON u.tenantId = t.id AND u.authority = :authority " +
+            "INNER JOIN TenantProfileEntity p ON t.tenantProfileId = p.id " +
+            "WHERE p.id IN :profiles")
+    Page<UserEntity> findByAuthorityAndTenantProfilesIds(@Param("authority") Authority authority,
+                                                         @Param("profiles") Collection<UUID> tenantProfilesIds,
+                                                         Pageable pageable);
+
     Long countByTenantId(UUID tenantId);
+
+    @Query("SELECT new org.thingsboard.server.common.data.edqs.fields.UserFields(u.id, u.createdTime, u.tenantId," +
+            "u.customerId, u.version, u.firstName, u.lastName, u.email, u.phone, u.additionalInfo) " +
+            "FROM UserEntity u WHERE u.id > :id ORDER BY u.id")
+    List<UserFields> findNextBatch(@Param("id") UUID id, Limit limit);
 }

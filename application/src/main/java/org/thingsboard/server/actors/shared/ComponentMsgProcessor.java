@@ -1,5 +1,5 @@
 /**
- * Copyright © 2016-2021 The Thingsboard Authors
+ * Copyright © 2016-2025 The Thingsboard Authors
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -19,7 +19,6 @@ import lombok.extern.slf4j.Slf4j;
 import org.thingsboard.server.actors.ActorSystemContext;
 import org.thingsboard.server.actors.TbActorCtx;
 import org.thingsboard.server.actors.stats.StatsPersistTick;
-import org.thingsboard.server.common.data.TenantProfile;
 import org.thingsboard.server.common.data.id.EntityId;
 import org.thingsboard.server.common.data.id.TenantId;
 import org.thingsboard.server.common.data.plugin.ComponentLifecycleState;
@@ -27,6 +26,8 @@ import org.thingsboard.server.common.data.tenant.profile.TenantProfileConfigurat
 import org.thingsboard.server.common.msg.TbMsg;
 import org.thingsboard.server.common.msg.queue.PartitionChangeMsg;
 import org.thingsboard.server.common.msg.queue.RuleNodeException;
+
+import java.util.concurrent.ScheduledFuture;
 
 @Slf4j
 public abstract class ComponentMsgProcessor<T extends EntityId> extends AbstractContextAwareMsgProcessor {
@@ -78,11 +79,21 @@ public abstract class ComponentMsgProcessor<T extends EntityId> extends Abstract
         start(context);
     }
 
-    public void scheduleStatsPersistTick(TbActorCtx context, long statsPersistFrequency) {
-        schedulePeriodicMsgWithDelay(context, new StatsPersistTick(), statsPersistFrequency, statsPersistFrequency);
+    public ScheduledFuture<?> scheduleStatsPersistTick(TbActorCtx context, long statsPersistFrequency) {
+        return schedulePeriodicMsgWithDelay(context, StatsPersistTick.INSTANCE, statsPersistFrequency, statsPersistFrequency);
     }
 
-    protected void checkActive(TbMsg tbMsg) throws RuleNodeException {
+    protected boolean checkMsgValid(TbMsg tbMsg) {
+        var valid = tbMsg.isValid();
+        if (!valid) {
+            if (log.isTraceEnabled()) {
+                log.trace("Skip processing of message: {} because it is no longer valid!", tbMsg);
+            }
+        }
+        return valid;
+    }
+
+    protected void checkComponentStateActive(TbMsg tbMsg) throws RuleNodeException {
         if (state != ComponentLifecycleState.ACTIVE) {
             log.debug("Component is not active. Current state [{}] for processor [{}][{}] tenant [{}]", state, entityId.getEntityType(), entityId, tenantId);
             RuleNodeException ruleNodeException = getInactiveException();

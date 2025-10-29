@@ -1,5 +1,5 @@
 /**
- * Copyright © 2016-2021 The Thingsboard Authors
+ * Copyright © 2016-2025 The Thingsboard Authors
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -16,23 +16,29 @@
 package org.thingsboard.server.dao.sql.tenant;
 
 import org.springframework.beans.factory.annotation.Autowired;
-import org.springframework.data.repository.CrudRepository;
+import org.springframework.data.domain.Limit;
+import org.springframework.data.jpa.repository.JpaRepository;
 import org.springframework.stereotype.Component;
 import org.thingsboard.server.common.data.EntityInfo;
+import org.thingsboard.server.common.data.EntityType;
 import org.thingsboard.server.common.data.TenantProfile;
+import org.thingsboard.server.common.data.edqs.fields.TenantProfileFields;
 import org.thingsboard.server.common.data.id.TenantId;
 import org.thingsboard.server.common.data.page.PageData;
 import org.thingsboard.server.common.data.page.PageLink;
 import org.thingsboard.server.dao.DaoUtil;
 import org.thingsboard.server.dao.model.sql.TenantProfileEntity;
-import org.thingsboard.server.dao.sql.JpaAbstractSearchTextDao;
+import org.thingsboard.server.dao.sql.JpaAbstractDao;
 import org.thingsboard.server.dao.tenant.TenantProfileDao;
+import org.thingsboard.server.dao.util.SqlDao;
 
-import java.util.Objects;
+import java.util.Arrays;
+import java.util.List;
 import java.util.UUID;
 
 @Component
-public class JpaTenantProfileDao extends JpaAbstractSearchTextDao<TenantProfileEntity, TenantProfile> implements TenantProfileDao {
+@SqlDao
+public class JpaTenantProfileDao extends JpaAbstractDao<TenantProfileEntity, TenantProfile> implements TenantProfileDao {
 
     @Autowired
     private TenantProfileRepository tenantProfileRepository;
@@ -43,7 +49,7 @@ public class JpaTenantProfileDao extends JpaAbstractSearchTextDao<TenantProfileE
     }
 
     @Override
-    protected CrudRepository<TenantProfileEntity, UUID> getCrudRepository() {
+    protected JpaRepository<TenantProfileEntity, UUID> getRepository() {
         return tenantProfileRepository;
     }
 
@@ -56,7 +62,7 @@ public class JpaTenantProfileDao extends JpaAbstractSearchTextDao<TenantProfileE
     public PageData<TenantProfile> findTenantProfiles(TenantId tenantId, PageLink pageLink) {
         return DaoUtil.toPageData(
                 tenantProfileRepository.findTenantProfiles(
-                        Objects.toString(pageLink.getTextSearch(), ""),
+                        pageLink.getTextSearch(),
                         DaoUtil.toPageable(pageLink)));
     }
 
@@ -64,7 +70,7 @@ public class JpaTenantProfileDao extends JpaAbstractSearchTextDao<TenantProfileE
     public PageData<EntityInfo> findTenantProfileInfos(TenantId tenantId, PageLink pageLink) {
         return DaoUtil.pageToPageData(
                 tenantProfileRepository.findTenantProfileInfos(
-                        Objects.toString(pageLink.getTextSearch(), ""),
+                        pageLink.getTextSearch(),
                         DaoUtil.toPageable(pageLink)));
     }
 
@@ -77,4 +83,20 @@ public class JpaTenantProfileDao extends JpaAbstractSearchTextDao<TenantProfileE
     public EntityInfo findDefaultTenantProfileInfo(TenantId tenantId) {
         return tenantProfileRepository.findDefaultTenantProfileInfo();
     }
+
+    @Override
+    public List<TenantProfile> findTenantProfilesByIds(TenantId tenantId, UUID[] ids) {
+        return DaoUtil.convertDataList(tenantProfileRepository.findByIdIn(Arrays.asList(ids)));
+    }
+
+    @Override
+    public List<TenantProfileFields> findNextBatch(UUID id, int batchSize) {
+        return tenantProfileRepository.findNextBatch(id, Limit.of(batchSize));
+    }
+
+    @Override
+    public EntityType getEntityType() {
+        return EntityType.TENANT_PROFILE;
+    }
+
 }

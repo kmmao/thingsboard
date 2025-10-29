@@ -1,5 +1,5 @@
 /**
- * Copyright © 2016-2021 The Thingsboard Authors
+ * Copyright © 2016-2025 The Thingsboard Authors
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -15,6 +15,7 @@
  */
 package org.thingsboard.server.service.security.auth.oauth2;
 
+import jakarta.servlet.http.HttpServletRequest;
 import lombok.Data;
 import lombok.ToString;
 import lombok.extern.slf4j.Slf4j;
@@ -23,10 +24,11 @@ import org.springframework.boot.web.client.RestTemplateBuilder;
 import org.springframework.security.oauth2.client.authentication.OAuth2AuthenticationToken;
 import org.springframework.stereotype.Service;
 import org.springframework.web.client.RestTemplate;
-import org.thingsboard.server.common.data.oauth2.OAuth2ClientRegistrationInfo;
 import org.thingsboard.server.common.data.oauth2.OAuth2MapperConfig;
+import org.thingsboard.server.common.data.oauth2.OAuth2Client;
 import org.thingsboard.server.dao.oauth2.OAuth2Configuration;
 import org.thingsboard.server.dao.oauth2.OAuth2User;
+import org.thingsboard.server.queue.util.TbCoreComponent;
 import org.thingsboard.server.service.security.model.SecurityUser;
 
 import java.util.ArrayList;
@@ -35,6 +37,7 @@ import java.util.Optional;
 
 @Service(value = "githubOAuth2ClientMapper")
 @Slf4j
+@TbCoreComponent
 public class GithubOAuth2ClientMapper extends AbstractOAuth2ClientMapper implements OAuth2ClientMapper {
     private static final String EMAIL_URL_KEY = "emailUrl";
 
@@ -46,13 +49,13 @@ public class GithubOAuth2ClientMapper extends AbstractOAuth2ClientMapper impleme
     private OAuth2Configuration oAuth2Configuration;
 
     @Override
-    public SecurityUser getOrCreateUserByClientPrincipal(OAuth2AuthenticationToken token, String providerAccessToken, OAuth2ClientRegistrationInfo clientRegistration) {
-        OAuth2MapperConfig config = clientRegistration.getMapperConfig();
+    public SecurityUser getOrCreateUserByClientPrincipal(HttpServletRequest request, OAuth2AuthenticationToken token, String providerAccessToken, OAuth2Client oAuth2Client) {
+        OAuth2MapperConfig config = oAuth2Client.getMapperConfig();
         Map<String, String> githubMapperConfig = oAuth2Configuration.getGithubMapper();
         String email = getEmail(githubMapperConfig.get(EMAIL_URL_KEY), providerAccessToken);
         Map<String, Object> attributes = token.getPrincipal().getAttributes();
         OAuth2User oAuth2User = BasicMapperUtils.getOAuth2User(email, attributes, config);
-        return getOrCreateSecurityUserFromOAuth2User(oAuth2User, clientRegistration);
+        return getOrCreateSecurityUserFromOAuth2User(oAuth2User, oAuth2Client);
     }
 
     private synchronized String getEmail(String emailUrl, String oauth2Token) {

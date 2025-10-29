@@ -1,5 +1,5 @@
 ///
-/// Copyright © 2016-2021 The Thingsboard Authors
+/// Copyright © 2016-2025 The Thingsboard Authors
 ///
 /// Licensed under the Apache License, Version 2.0 (the "License");
 /// you may not use this file except in compliance with the License.
@@ -19,15 +19,31 @@ import { UserId } from './id/user-id';
 import { CustomerId } from './id/customer-id';
 import { Authority } from './authority.enum';
 import { TenantId } from './id/tenant-id';
+import { HasTenantId } from '@shared/models/entity.models';
+import { UnitSystem } from '@shared/models/unit.models';
 
-export interface User extends BaseData<UserId> {
+export interface User extends BaseData<UserId>, HasTenantId {
   tenantId: TenantId;
   customerId: CustomerId;
   email: string;
+  phone: string;
   authority: Authority;
   firstName: string;
   lastName: string;
-  additionalInfo: any;
+  additionalInfo: Partial<UserAdditionalInfo>;
+}
+
+export interface UserAdditionalInfo {
+  userCredentialsEnabled: boolean;
+  userActivated: boolean;
+  description: string;
+  defaultDashboardId: string;
+  defaultDashboardFullscreen: boolean;
+  homeDashboardId: string;
+  homeDashboardHideToolbar: boolean;
+  unitSystem: UnitSystem;
+  lang: string;
+  [key: string]: any;
 }
 
 export enum ActivationMethod {
@@ -42,6 +58,11 @@ export const activationMethodTranslations = new Map<ActivationMethod, string>(
   ]
 );
 
+export interface ActivationLinkInfo {
+  value: string;
+  ttlMs: number;
+}
+
 export interface AuthUser {
   sub: string;
   scopes: string[];
@@ -53,4 +74,11 @@ export interface AuthUser {
   customerId: string;
   isPublic: boolean;
   authority: Authority;
+}
+
+export interface UserEmailInfo {
+  id: UserId;
+  email: string;
+  firstName: string;
+  lastName: string;
 }

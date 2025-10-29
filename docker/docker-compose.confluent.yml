@@ -1,5 +1,5 @@
 #
-# Copyright © 2016-2021 The Thingsboard Authors
+# Copyright © 2016-2025 The Thingsboard Authors
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -14,8 +14,6 @@
 # limitations under the License.
 #
 
-version: '2.2'
-
 services:
   tb-js-executor:
     env_file:
@@ -23,23 +21,15 @@ services:
   tb-core1:
     env_file:
       - queue-confluent.env
-    depends_on:
-      - redis
   tb-core2:
     env_file:
       - queue-confluent.env
-    depends_on:
-      - redis
   tb-rule-engine1:
     env_file:
       - queue-confluent.env
-    depends_on:
-      - redis
   tb-rule-engine2:
     env_file:
       - queue-confluent.env
-    depends_on:
-      - redis
   tb-mqtt-transport1:
     env_file:
       - queue-confluent.env
@@ -59,5 +49,11 @@ services:
     env_file:
       - queue-confluent.env
   tb-snmp-transport:
+    env_file:
+      - queue-confluent.env
+  tb-vc-executor1:
+    env_file:
+      - queue-confluent.env
+  tb-vc-executor2:
     env_file:
       - queue-confluent.env

@@ -1,5 +1,5 @@
 /**
- * Copyright © 2016-2021 The Thingsboard Authors
+ * Copyright © 2016-2025 The Thingsboard Authors
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -16,53 +16,109 @@
 package org.thingsboard.server.msa.connectivity;
 
 import com.fasterxml.jackson.databind.JsonNode;
-import com.google.common.collect.Sets;
+import com.google.common.util.concurrent.Futures;
 import com.google.common.util.concurrent.ListenableFuture;
 import com.google.common.util.concurrent.ListeningExecutorService;
 import com.google.common.util.concurrent.MoreExecutors;
 import com.google.gson.JsonObject;
 import io.netty.buffer.ByteBuf;
 import io.netty.buffer.Unpooled;
+import io.netty.handler.codec.mqtt.MqttConnectReturnCode;
+import io.netty.handler.codec.mqtt.MqttMessage;
 import io.netty.handler.codec.mqtt.MqttQoS;
+import io.netty.handler.codec.mqtt.MqttReasonCodeAndPropertiesVariableHeader;
+import io.netty.handler.codec.mqtt.MqttReasonCodes;
+import io.netty.handler.codec.mqtt.MqttSubAckMessage;
+import io.netty.handler.codec.mqtt.MqttVersion;
 import lombok.Data;
 import lombok.extern.slf4j.Slf4j;
-import org.apache.commons.lang3.RandomStringUtils;
-import org.junit.*;
-import org.junit.rules.TestRule;
-import org.junit.rules.TestWatcher;
-import org.junit.runner.Description;
-import org.springframework.core.ParameterizedTypeReference;
-import org.springframework.http.HttpMethod;
-import org.springframework.http.ResponseEntity;
+import org.awaitility.Awaitility;
+import org.testng.annotations.AfterMethod;
+import org.testng.annotations.BeforeMethod;
+import org.testng.annotations.Test;
+import org.thingsboard.common.util.AbstractListeningExecutor;
+import org.thingsboard.common.util.ThingsBoardThreadFactory;
 import org.thingsboard.mqtt.MqttClient;
+import org.thingsboard.mqtt.MqttClientCallback;
 import org.thingsboard.mqtt.MqttClientConfig;
 import org.thingsboard.mqtt.MqttHandler;
 import org.thingsboard.server.common.data.Device;
+import org.thingsboard.server.common.data.DeviceProfile;
+import org.thingsboard.server.common.data.DeviceProfileProvisionType;
+import org.thingsboard.server.common.data.StringUtils;
+import org.thingsboard.server.common.data.id.RpcId;
 import org.thingsboard.server.common.data.id.RuleChainId;
 import org.thingsboard.server.common.data.page.PageData;
+import org.thingsboard.server.common.data.page.PageLink;
+import org.thingsboard.server.common.data.rpc.Rpc;
 import org.thingsboard.server.common.data.rule.NodeConnectionInfo;
 import org.thingsboard.server.common.data.rule.RuleChain;
 import org.thingsboard.server.common.data.rule.RuleChainMetaData;
 import org.thingsboard.server.common.data.rule.RuleNode;
 import org.thingsboard.server.common.data.security.DeviceCredentials;
 import org.thingsboard.server.msa.AbstractContainerTest;
+import org.thingsboard.server.msa.DisableUIListeners;
 import org.thingsboard.server.msa.WsClient;
 import org.thingsboard.server.msa.mapper.AttributesResponse;
 import org.thingsboard.server.msa.mapper.WsTelemetryResponse;
 
 import java.io.IOException;
 import java.nio.charset.StandardCharsets;
-import java.util.*;
-import java.util.concurrent.*;
+import java.util.ArrayList;
+import java.util.Arrays;
+import java.util.List;
+import java.util.Objects;
+import java.util.Optional;
+import java.util.Random;
+import java.util.UUID;
+import java.util.concurrent.ArrayBlockingQueue;
+import java.util.concurrent.BlockingQueue;
+import java.util.concurrent.ExecutionException;
+import java.util.concurrent.Executors;
+import java.util.concurrent.TimeUnit;
+import java.util.concurrent.TimeoutException;
 
+import static org.assertj.core.api.Assertions.assertThat;
+import static org.testng.Assert.assertNotNull;
+import static org.testng.Assert.fail;
+import static org.thingsboard.server.common.data.AttributeScope.SHARED_SCOPE;
+import static org.thingsboard.server.msa.prototypes.DevicePrototypes.defaultDevicePrototype;
+
+@DisableUIListeners
 @Slf4j
 public class MqttClientTest extends AbstractContainerTest {
 
+    private static final String TRANSPORT_HOST = "localhost";
+    private static final int TRANSPORT_PORT = 1883;
+
+    private Device device;
+    AbstractListeningExecutor handlerExecutor;
+
+    @BeforeMethod
+    public void setUp() throws Exception {
+        this.handlerExecutor = new AbstractListeningExecutor() {
+            @Override
+            protected int getThreadPollSize() {
+                return 4;
+            }
+        };
+        handlerExecutor.init();
+
+        testRestClient.login("tenant@thingsboard.org", "tenant");
+        device = testRestClient.postDevice("", defaultDevicePrototype("http_"));
+    }
+
+    @AfterMethod
+    public void tearDown() {
+        testRestClient.deleteDeviceIfExists(device.getId());
+        if (handlerExecutor != null) {
+            handlerExecutor.destroy();
+        }
+    }
+
     @Test
     public void telemetryUpload() throws Exception {
-        restClient.login("tenant@thingsboard.org", "tenant");
-        Device device = createDevice("mqtt_");
-        DeviceCredentials deviceCredentials = restClient.getDeviceCredentialsByDeviceId(device.getId()).get();
+        DeviceCredentials deviceCredentials = testRestClient.getDeviceCredentialsByDeviceId(device.getId());
 
         WsClient wsClient = subscribeToWebSocket(device.getId(), "LATEST_TELEMETRY", CmdsType.TS_SUB_CMDS);
         MqttClient mqttClient = getMqttClient(deviceCredentials, null);
@@ -71,25 +127,19 @@ public class MqttClientTest extends AbstractContainerTest {
         log.info("Received telemetry: {}", actualLatestTelemetry);
         wsClient.closeBlocking();
 
-        Assert.assertEquals(4, actualLatestTelemetry.getData().size());
-        Assert.assertEquals(Sets.newHashSet("booleanKey", "stringKey", "doubleKey", "longKey"),
-                actualLatestTelemetry.getLatestValues().keySet());
+        assertThat(actualLatestTelemetry.getData()).hasSize(4);
+        assertThat(actualLatestTelemetry.getLatestValues().keySet()).containsOnlyOnceElementsOf(Arrays.asList("booleanKey", "stringKey", "doubleKey", "longKey"));
 
-        Assert.assertTrue(verify(actualLatestTelemetry, "booleanKey", Boolean.TRUE.toString()));
-        Assert.assertTrue(verify(actualLatestTelemetry, "stringKey", "value1"));
-        Assert.assertTrue(verify(actualLatestTelemetry, "doubleKey", Double.toString(42.0)));
-        Assert.assertTrue(verify(actualLatestTelemetry, "longKey", Long.toString(73)));
-
-        restClient.getRestTemplate().delete(HTTPS_URL + "/api/device/" + device.getId());
+        assertThat(actualLatestTelemetry.getDataValuesByKey("booleanKey").get(1)).isEqualTo(Boolean.TRUE.toString());
+        assertThat(actualLatestTelemetry.getDataValuesByKey("stringKey").get(1)).isEqualTo("value1");
+        assertThat(actualLatestTelemetry.getDataValuesByKey("doubleKey").get(1)).isEqualTo(Double.toString(42.0));
+        assertThat(actualLatestTelemetry.getDataValuesByKey("longKey").get(1)).isEqualTo(Long.toString(73));
     }
 
     @Test
     public void telemetryUploadWithTs() throws Exception {
         long ts = 1451649600512L;
-
-        restClient.login("tenant@thingsboard.org", "tenant");
-        Device device = createDevice("mqtt_");
-        DeviceCredentials deviceCredentials = restClient.getDeviceCredentialsByDeviceId(device.getId()).get();
+        DeviceCredentials deviceCredentials = testRestClient.getDeviceCredentialsByDeviceId(device.getId());
 
         WsClient wsClient = subscribeToWebSocket(device.getId(), "LATEST_TELEMETRY", CmdsType.TS_SUB_CMDS);
         MqttClient mqttClient = getMqttClient(deviceCredentials, null);
@@ -98,22 +148,18 @@ public class MqttClientTest extends AbstractContainerTest {
         log.info("Received telemetry: {}", actualLatestTelemetry);
         wsClient.closeBlocking();
 
-        Assert.assertEquals(4, actualLatestTelemetry.getData().size());
-        Assert.assertEquals(getExpectedLatestValues(ts), actualLatestTelemetry.getLatestValues());
+        assertThat(actualLatestTelemetry.getData()).hasSize(4);
+        assertThat(getExpectedLatestValues(ts)).isEqualTo(actualLatestTelemetry.getLatestValues());
 
-        Assert.assertTrue(verify(actualLatestTelemetry, "booleanKey", ts, Boolean.TRUE.toString()));
-        Assert.assertTrue(verify(actualLatestTelemetry, "stringKey", ts, "value1"));
-        Assert.assertTrue(verify(actualLatestTelemetry, "doubleKey", ts, Double.toString(42.0)));
-        Assert.assertTrue(verify(actualLatestTelemetry, "longKey", ts, Long.toString(73)));
-
-        restClient.getRestTemplate().delete(HTTPS_URL + "/api/device/" + device.getId());
+        assertThat(actualLatestTelemetry.getDataValuesByKey("booleanKey").get(1)).isEqualTo(Boolean.TRUE.toString());
+        assertThat(actualLatestTelemetry.getDataValuesByKey("stringKey").get(1)).isEqualTo("value1");
+        assertThat(actualLatestTelemetry.getDataValuesByKey("doubleKey").get(1)).isEqualTo(Double.toString(42.0));
+        assertThat(actualLatestTelemetry.getDataValuesByKey("longKey").get(1)).isEqualTo(Long.toString(73));
     }
 
     @Test
     public void publishAttributeUpdateToServer() throws Exception {
-        restClient.login("tenant@thingsboard.org", "tenant");
-        Device device = createDevice("mqtt_");
-        DeviceCredentials deviceCredentials = restClient.getDeviceCredentialsByDeviceId(device.getId()).get();
+        DeviceCredentials deviceCredentials = testRestClient.getDeviceCredentialsByDeviceId(device.getId());
 
         WsClient wsClient = subscribeToWebSocket(device.getId(), "CLIENT_SCOPE", CmdsType.ATTR_SUB_CMDS);
         MqttMessageListener listener = new MqttMessageListener();
@@ -128,23 +174,18 @@ public class MqttClientTest extends AbstractContainerTest {
         log.info("Received telemetry: {}", actualLatestTelemetry);
         wsClient.closeBlocking();
 
-        Assert.assertEquals(4, actualLatestTelemetry.getData().size());
-        Assert.assertEquals(Sets.newHashSet("attr1", "attr2", "attr3", "attr4"),
-                actualLatestTelemetry.getLatestValues().keySet());
+        assertThat(actualLatestTelemetry.getData()).hasSize(4);
+        assertThat(actualLatestTelemetry.getLatestValues().keySet()).containsOnlyOnceElementsOf(Arrays.asList("attr1", "attr2", "attr3", "attr4"));
 
-        Assert.assertTrue(verify(actualLatestTelemetry, "attr1", "value1"));
-        Assert.assertTrue(verify(actualLatestTelemetry, "attr2", Boolean.TRUE.toString()));
-        Assert.assertTrue(verify(actualLatestTelemetry, "attr3", Double.toString(42.0)));
-        Assert.assertTrue(verify(actualLatestTelemetry, "attr4", Long.toString(73)));
-
-        restClient.getRestTemplate().delete(HTTPS_URL + "/api/device/" + device.getId());
+        assertThat(actualLatestTelemetry.getDataValuesByKey("attr1").get(1)).isEqualTo("value1");
+        assertThat(actualLatestTelemetry.getDataValuesByKey("attr2").get(1)).isEqualTo(Boolean.TRUE.toString());
+        assertThat(actualLatestTelemetry.getDataValuesByKey("attr3").get(1)).isEqualTo(Double.toString(42.0));
+        assertThat(actualLatestTelemetry.getDataValuesByKey("attr4").get(1)).isEqualTo(Long.toString(73));
     }
 
     @Test
     public void requestAttributeValuesFromServer() throws Exception {
-        restClient.login("tenant@thingsboard.org", "tenant");
-        Device device = createDevice("mqtt_");
-        DeviceCredentials deviceCredentials = restClient.getDeviceCredentialsByDeviceId(device.getId()).get();
+        DeviceCredentials deviceCredentials = testRestClient.getDeviceCredentialsByDeviceId(device.getId());
 
         WsClient wsClient = subscribeToWebSocket(device.getId(), "CLIENT_SCOPE", CmdsType.ATTR_SUB_CMDS);
         MqttMessageListener listener = new MqttMessageListener();
@@ -152,7 +193,7 @@ public class MqttClientTest extends AbstractContainerTest {
 
         // Add a new client attribute
         JsonObject clientAttributes = new JsonObject();
-        String clientAttributeValue = RandomStringUtils.randomAlphanumeric(8);
+        String clientAttributeValue = StringUtils.randomAlphanumeric(8);
         clientAttributes.addProperty("clientAttr", clientAttributeValue);
         mqttClient.publish("v1/devices/me/attributes", Unpooled.wrappedBuffer(clientAttributes.toString().getBytes())).get();
 
@@ -160,144 +201,172 @@ public class MqttClientTest extends AbstractContainerTest {
         log.info("Received ws telemetry: {}", actualLatestTelemetry);
         wsClient.closeBlocking();
 
-        Assert.assertEquals(1, actualLatestTelemetry.getData().size());
-        Assert.assertEquals(Sets.newHashSet("clientAttr"),
-                actualLatestTelemetry.getLatestValues().keySet());
-
-        Assert.assertTrue(verify(actualLatestTelemetry, "clientAttr", clientAttributeValue));
+        assertThat(actualLatestTelemetry.getData()).hasSize(1);
+        assertThat(actualLatestTelemetry.getLatestValues().keySet()).containsOnly("clientAttr");
+        assertThat(actualLatestTelemetry.getDataValuesByKey("clientAttr").get(1)).isEqualTo(clientAttributeValue);
 
         // Add a new shared attribute
         JsonObject sharedAttributes = new JsonObject();
-        String sharedAttributeValue = RandomStringUtils.randomAlphanumeric(8);
+        String sharedAttributeValue = StringUtils.randomAlphanumeric(8);
         sharedAttributes.addProperty("sharedAttr", sharedAttributeValue);
-        ResponseEntity sharedAttributesResponse = restClient.getRestTemplate()
-                .postForEntity(HTTPS_URL + "/api/plugins/telemetry/DEVICE/{deviceId}/SHARED_SCOPE",
-                        mapper.readTree(sharedAttributes.toString()), ResponseEntity.class,
-                        device.getId());
-        Assert.assertTrue(sharedAttributesResponse.getStatusCode().is2xxSuccessful());
+        JsonNode sharedAttribute = mapper.readTree(sharedAttributes.toString());
+        testRestClient.postTelemetryAttribute(device.getId(), SHARED_SCOPE, sharedAttribute);
 
         // Subscribe to attributes response
         mqttClient.on("v1/devices/me/attributes/response/+", listener, MqttQoS.AT_LEAST_ONCE).get();
 
         // Wait until subscription is processed
-        TimeUnit.SECONDS.sleep(3);
+        TimeUnit.SECONDS.sleep(3 * timeoutMultiplier);
 
         // Request attributes
         JsonObject request = new JsonObject();
         request.addProperty("clientKeys", "clientAttr");
         request.addProperty("sharedKeys", "sharedAttr");
         mqttClient.publish("v1/devices/me/attributes/request/" + new Random().nextInt(100), Unpooled.wrappedBuffer(request.toString().getBytes())).get();
-        MqttEvent event = listener.getEvents().poll(10, TimeUnit.SECONDS);
+        MqttEvent event = listener.getEvents().poll(10 * timeoutMultiplier, TimeUnit.SECONDS);
         AttributesResponse attributes = mapper.readValue(Objects.requireNonNull(event).getMessage(), AttributesResponse.class);
         log.info("Received telemetry: {}", attributes);
 
-        Assert.assertEquals(1, attributes.getClient().size());
-        Assert.assertEquals(clientAttributeValue, attributes.getClient().get("clientAttr"));
+        assertThat(attributes.getClient()).hasSize(1);
+        assertThat(attributes.getClient().get("clientAttr")).isEqualTo(clientAttributeValue);
 
-        Assert.assertEquals(1, attributes.getShared().size());
-        Assert.assertEquals(sharedAttributeValue, attributes.getShared().get("sharedAttr"));
-
-        restClient.getRestTemplate().delete(HTTPS_URL + "/api/device/" + device.getId());
+        assertThat(attributes.getShared()).hasSize(1);
+        assertThat(attributes.getShared().get("sharedAttr")).isEqualTo(sharedAttributeValue);
     }
 
     @Test
     public void subscribeToAttributeUpdatesFromServer() throws Exception {
-        restClient.login("tenant@thingsboard.org", "tenant");
-        Device device = createDevice("mqtt_");
-        DeviceCredentials deviceCredentials = restClient.getDeviceCredentialsByDeviceId(device.getId()).get();
+        DeviceCredentials deviceCredentials = testRestClient.getDeviceCredentialsByDeviceId(device.getId());
 
         MqttMessageListener listener = new MqttMessageListener();
         MqttClient mqttClient = getMqttClient(deviceCredentials, listener);
         mqttClient.on("v1/devices/me/attributes", listener, MqttQoS.AT_LEAST_ONCE).get();
 
         // Wait until subscription is processed
-        TimeUnit.SECONDS.sleep(3);
+        TimeUnit.SECONDS.sleep(3 * timeoutMultiplier);
 
         String sharedAttributeName = "sharedAttr";
 
         // Add a new shared attribute
         JsonObject sharedAttributes = new JsonObject();
-        String sharedAttributeValue = RandomStringUtils.randomAlphanumeric(8);
+        String sharedAttributeValue = StringUtils.randomAlphanumeric(8);
         sharedAttributes.addProperty(sharedAttributeName, sharedAttributeValue);
-        ResponseEntity sharedAttributesResponse = restClient.getRestTemplate()
-                .postForEntity(HTTPS_URL + "/api/plugins/telemetry/DEVICE/{deviceId}/SHARED_SCOPE",
-                        mapper.readTree(sharedAttributes.toString()), ResponseEntity.class,
-                        device.getId());
-        Assert.assertTrue(sharedAttributesResponse.getStatusCode().is2xxSuccessful());
+        JsonNode sharedAttribute = mapper.readTree(sharedAttributes.toString());
 
-        MqttEvent event = listener.getEvents().poll(10, TimeUnit.SECONDS);
-        Assert.assertEquals(sharedAttributeValue,
-                mapper.readValue(Objects.requireNonNull(event).getMessage(), JsonNode.class).get(sharedAttributeName).asText());
+        testRestClient.postTelemetryAttribute(device.getId(), SHARED_SCOPE, sharedAttribute);
+
+        MqttEvent event = listener.getEvents().poll(10 * timeoutMultiplier, TimeUnit.SECONDS);
+        assertThat(mapper.readValue(Objects.requireNonNull(event).getMessage(), JsonNode.class).get(sharedAttributeName).asText())
+                .isEqualTo(sharedAttributeValue);
 
         // Update the shared attribute value
         JsonObject updatedSharedAttributes = new JsonObject();
-        String updatedSharedAttributeValue = RandomStringUtils.randomAlphanumeric(8);
+        String updatedSharedAttributeValue = StringUtils.randomAlphanumeric(8);
         updatedSharedAttributes.addProperty(sharedAttributeName, updatedSharedAttributeValue);
-        ResponseEntity updatedSharedAttributesResponse = restClient.getRestTemplate()
-                .postForEntity(HTTPS_URL + "/api/plugins/telemetry/DEVICE/{deviceId}/SHARED_SCOPE",
-                        mapper.readTree(updatedSharedAttributes.toString()), ResponseEntity.class,
-                        device.getId());
-        Assert.assertTrue(updatedSharedAttributesResponse.getStatusCode().is2xxSuccessful());
+        testRestClient.postTelemetryAttribute(device.getId(), SHARED_SCOPE, mapper.readTree(updatedSharedAttributes.toString()));
 
-        event = listener.getEvents().poll(10, TimeUnit.SECONDS);
-        Assert.assertEquals(updatedSharedAttributeValue,
-                mapper.readValue(Objects.requireNonNull(event).getMessage(), JsonNode.class).get(sharedAttributeName).asText());
-
-        restClient.getRestTemplate().delete(HTTPS_URL + "/api/device/" + device.getId());
+        event = listener.getEvents().poll(10 * timeoutMultiplier, TimeUnit.SECONDS);
+        assertThat(mapper.readValue(Objects.requireNonNull(event).getMessage(), JsonNode.class).get(sharedAttributeName).asText())
+                .isEqualTo(updatedSharedAttributeValue);
     }
 
     @Test
     public void serverSideRpc() throws Exception {
-        restClient.login("tenant@thingsboard.org", "tenant");
-        Device device = createDevice("mqtt_");
-        DeviceCredentials deviceCredentials = restClient.getDeviceCredentialsByDeviceId(device.getId()).get();
+        DeviceCredentials deviceCredentials = testRestClient.getDeviceCredentialsByDeviceId(device.getId());
 
         MqttMessageListener listener = new MqttMessageListener();
         MqttClient mqttClient = getMqttClient(deviceCredentials, listener);
         mqttClient.on("v1/devices/me/rpc/request/+", listener, MqttQoS.AT_LEAST_ONCE).get();
 
         // Wait until subscription is processed
-        TimeUnit.SECONDS.sleep(3);
+        TimeUnit.SECONDS.sleep(3 * timeoutMultiplier);
 
         // Send an RPC from the server
         JsonObject serverRpcPayload = new JsonObject();
         serverRpcPayload.addProperty("method", "getValue");
         serverRpcPayload.addProperty("params", true);
-        ListeningExecutorService service = MoreExecutors.listeningDecorator(Executors.newSingleThreadExecutor());
-        ListenableFuture<ResponseEntity> future = service.submit(() -> {
+        ListeningExecutorService service = MoreExecutors.listeningDecorator(Executors.newSingleThreadExecutor(ThingsBoardThreadFactory.forName(getClass().getSimpleName())));
+        ListenableFuture<JsonNode> future = service.submit(() -> {
             try {
-                return restClient.getRestTemplate()
-                        .postForEntity(HTTPS_URL + "/api/plugins/rpc/twoway/{deviceId}",
-                                mapper.readTree(serverRpcPayload.toString()), String.class,
-                                device.getId());
+                return testRestClient.postServerSideRpc(device.getId(), mapper.readTree(serverRpcPayload.toString()));
             } catch (IOException e) {
-                return ResponseEntity.badRequest().build();
+                return null;
             }
         });
 
         // Wait for RPC call from the server and send the response
-        MqttEvent requestFromServer = listener.getEvents().poll(10, TimeUnit.SECONDS);
+        MqttEvent requestFromServer = listener.getEvents().poll(10 * timeoutMultiplier, TimeUnit.SECONDS);
 
-        Assert.assertEquals("{\"method\":\"getValue\",\"params\":true}", Objects.requireNonNull(requestFromServer).getMessage());
+        assertThat(Objects.requireNonNull(requestFromServer).getMessage()).isEqualTo("{\"method\":\"getValue\",\"params\":true}");
 
-        Integer requestId = Integer.valueOf(Objects.requireNonNull(requestFromServer).getTopic().substring("v1/devices/me/rpc/request/".length()));
+        int requestId = Integer.parseInt(Objects.requireNonNull(requestFromServer).getTopic().substring("v1/devices/me/rpc/request/".length()));
         JsonObject clientResponse = new JsonObject();
         clientResponse.addProperty("response", "someResponse");
         // Send a response to the server's RPC request
         mqttClient.publish("v1/devices/me/rpc/response/" + requestId, Unpooled.wrappedBuffer(clientResponse.toString().getBytes())).get();
 
-        ResponseEntity serverResponse = future.get(5, TimeUnit.SECONDS);
-        Assert.assertTrue(serverResponse.getStatusCode().is2xxSuccessful());
-        Assert.assertEquals(clientResponse.toString(), serverResponse.getBody());
+        JsonNode serverResponse = future.get(5 * timeoutMultiplier, TimeUnit.SECONDS);
+        service.shutdownNow();
+        assertThat(serverResponse).isEqualTo(mapper.readTree(clientResponse.toString()));
+    }
 
-        restClient.getRestTemplate().delete(HTTPS_URL + "/api/device/" + device.getId());
+    @Test
+    public void serverSidePersistedRpc() throws Exception {
+        DeviceCredentials deviceCredentials = testRestClient.getDeviceCredentialsByDeviceId(device.getId());
+
+        MqttMessageListener listener = new MqttMessageListener();
+        MqttClient mqttClient = getMqttClient(deviceCredentials, listener);
+        mqttClient.on("v1/devices/me/rpc/request/+", listener, MqttQoS.AT_LEAST_ONCE).get();
+
+        // Wait until subscription is processed
+        TimeUnit.SECONDS.sleep(3 * timeoutMultiplier);
+
+        // Send an RPC from the server
+        JsonObject serverRpcPayload = new JsonObject();
+        serverRpcPayload.addProperty("method", "getValue");
+        serverRpcPayload.addProperty("params", true);
+        serverRpcPayload.addProperty("persistent", true);
+
+        JsonNode persistentRpcId = testRestClient.postServerSideRpc(device.getId(), mapper.readTree(serverRpcPayload.toString()));
+
+        assertNotNull(persistentRpcId);
+
+        RpcId rpcId = new RpcId(UUID.fromString(persistentRpcId.get("rpcId").asText()));
+
+        // Wait for RPC call from the server and send the response
+        MqttEvent requestFromServer = listener.getEvents().poll(10 * timeoutMultiplier, TimeUnit.SECONDS);
+
+        assertThat(Objects.requireNonNull(requestFromServer).getMessage()).isEqualTo("{\"method\":\"getValue\",\"params\":true}");
+
+        int requestId = Integer.parseInt(Objects.requireNonNull(requestFromServer).getTopic().substring("v1/devices/me/rpc/request/".length()));
+        JsonObject clientResponse = new JsonObject();
+        clientResponse.addProperty("response", "someResponse");
+        // Send a response to the server's RPC request
+        mqttClient.publish("v1/devices/me/rpc/response/" + requestId, Unpooled.wrappedBuffer(clientResponse.toString().getBytes())).get();
+
+        PageLink pageLink = new PageLink(10);
+
+        Awaitility.await()
+                .pollInterval(500, TimeUnit.MILLISECONDS)
+                .atMost(5 * timeoutMultiplier, TimeUnit.SECONDS)
+                .until(() -> {
+                    PageData<Rpc> rpcByDevice = testRestClient.getPersistedRpcByDevice(device.getId(), pageLink);
+                    for (Rpc rpc : rpcByDevice.getData()) {
+                        if (rpc.getId().equals(rpcId)) {
+                            return true;
+                        }
+                    }
+                    return false;
+                });
+
+        Rpc persistentRpc = testRestClient.getPersistedRpc(rpcId);
+
+        assertThat(persistentRpc.getResponse()).isEqualTo(mapper.readTree(clientResponse.toString()));
     }
 
     @Test
     public void clientSideRpc() throws Exception {
-        restClient.login("tenant@thingsboard.org", "tenant");
-        Device device = createDevice("mqtt_");
-        DeviceCredentials deviceCredentials = restClient.getDeviceCredentialsByDeviceId(device.getId()).get();
+        DeviceCredentials deviceCredentials = testRestClient.getDeviceCredentialsByDeviceId(device.getId());
 
         MqttMessageListener listener = new MqttMessageListener();
         MqttClient mqttClient = getMqttClient(deviceCredentials, listener);
@@ -309,7 +378,7 @@ public class MqttClientTest extends AbstractContainerTest {
         // Create a new root rule chain
         RuleChainId ruleChainId = createRootRuleChainForRpcResponse();
 
-        TimeUnit.SECONDS.sleep(3);
+        TimeUnit.SECONDS.sleep(3 * timeoutMultiplier);
         // Send the request to the server
         JsonObject clientRequest = new JsonObject();
         clientRequest.addProperty("method", "getResponse");
@@ -318,34 +387,242 @@ public class MqttClientTest extends AbstractContainerTest {
         mqttClient.publish("v1/devices/me/rpc/request/" + requestId, Unpooled.wrappedBuffer(clientRequest.toString().getBytes())).get();
 
         // Check the response from the server
-        TimeUnit.SECONDS.sleep(1);
-        MqttEvent responseFromServer = listener.getEvents().poll(1, TimeUnit.SECONDS);
+        TimeUnit.SECONDS.sleep(3 * timeoutMultiplier);
+        MqttEvent responseFromServer = listener.getEvents().poll(3 * timeoutMultiplier, TimeUnit.SECONDS);
         Integer responseId = Integer.valueOf(Objects.requireNonNull(responseFromServer).getTopic().substring("v1/devices/me/rpc/response/".length()));
-        Assert.assertEquals(requestId, responseId);
-        Assert.assertEquals("requestReceived", mapper.readTree(responseFromServer.getMessage()).get("response").asText());
+        assertThat(responseId).isEqualTo(requestId);
+        assertThat(mapper.readTree(responseFromServer.getMessage()).get("response").asText()).isEqualTo("requestReceived");
 
         // Make the default rule chain a root again
-        ResponseEntity<RuleChain> rootRuleChainResponse = restClient.getRestTemplate()
-                .postForEntity(HTTPS_URL + "/api/ruleChain/{ruleChainId}/root",
-                        null,
-                        RuleChain.class,
-                        defaultRuleChainId);
-        Assert.assertTrue(rootRuleChainResponse.getStatusCode().is2xxSuccessful());
+        testRestClient.setRootRuleChain(defaultRuleChainId);
 
         // Delete the created rule chain
-        restClient.getRestTemplate().delete(HTTPS_URL + "/api/ruleChain/{ruleChainId}", ruleChainId);
-        restClient.getRestTemplate().delete(HTTPS_URL + "/api/device/" + device.getId());
+        testRestClient.deleteRuleChain(ruleChainId);
+    }
+
+    @Test
+    public void deviceDeletedClosingSession() throws Exception {
+        DeviceCredentials deviceCredentials = testRestClient.getDeviceCredentialsByDeviceId(device.getId());
+
+        MqttMessageListener listener = new MqttMessageListener();
+        MqttClient mqttClient = getMqttClient(deviceCredentials, listener);
+
+        testRestClient.deleteDeviceIfExists(device.getId());
+
+        Awaitility
+                .await()
+                .alias("Check device connection.")
+                .atMost(10, TimeUnit.SECONDS)
+                .until(() -> !mqttClient.isConnected());
+    }
+
+    @Test
+    public void provisionRequestForDeviceWithPreProvisionedStrategy() throws Exception {
+
+        DeviceProfile deviceProfile = testRestClient.getDeviceProfileById(device.getDeviceProfileId());
+        deviceProfile = updateDeviceProfileWithProvisioningStrategy(deviceProfile, DeviceProfileProvisionType.CHECK_PRE_PROVISIONED_DEVICES);
+
+        DeviceCredentials expectedDeviceCredentials = testRestClient.getDeviceCredentialsByDeviceId(device.getId());
+
+        MqttMessageListener listener = new MqttMessageListener();
+        MqttClient mqttClient = getMqttClient("provision", listener);
+
+        JsonObject provisionRequest = new JsonObject();
+        provisionRequest.addProperty("provisionDeviceKey", TEST_PROVISION_DEVICE_KEY);
+        provisionRequest.addProperty("provisionDeviceSecret", TEST_PROVISION_DEVICE_SECRET);
+        provisionRequest.addProperty("deviceName", device.getName());
+
+        mqttClient.publish("/provision/request", Unpooled.wrappedBuffer(provisionRequest.toString().getBytes())).get();
+
+        //Wait for response
+        TimeUnit.SECONDS.sleep(3 * timeoutMultiplier);
+
+        MqttEvent provisionResponseMsg = listener.getEvents().poll(timeoutMultiplier, TimeUnit.SECONDS);
+
+        assertThat(provisionResponseMsg).isNotNull();
+
+        JsonNode provisionResponse = mapper.readTree(provisionResponseMsg.getMessage());
+
+        assertThat(provisionResponse.get("credentialsType").asText()).isEqualTo(expectedDeviceCredentials.getCredentialsType().name());
+        assertThat(provisionResponse.get("credentialsValue").asText()).isEqualTo(expectedDeviceCredentials.getCredentialsId());
+        assertThat(provisionResponse.get("status").asText()).isEqualTo("SUCCESS");
+
+        updateDeviceProfileWithProvisioningStrategy(deviceProfile, DeviceProfileProvisionType.DISABLED);
+    }
+
+    @Test
+    public void provisionRequestForDeviceWithAllowToCreateNewDevicesStrategy() throws Exception {
+
+        String testDeviceName = "test_provision_device";
+
+        DeviceProfile deviceProfile = testRestClient.getDeviceProfileById(device.getDeviceProfileId());
+
+        deviceProfile = updateDeviceProfileWithProvisioningStrategy(deviceProfile, DeviceProfileProvisionType.ALLOW_CREATE_NEW_DEVICES);
+
+        MqttMessageListener listener = new MqttMessageListener();
+        MqttClient mqttClient = getMqttClient("provision", listener);
+
+        JsonObject provisionRequest = new JsonObject();
+        provisionRequest.addProperty("provisionDeviceKey", TEST_PROVISION_DEVICE_KEY);
+        provisionRequest.addProperty("provisionDeviceSecret", TEST_PROVISION_DEVICE_SECRET);
+        provisionRequest.addProperty("deviceName", testDeviceName);
+
+        mqttClient.publish("/provision/request", Unpooled.wrappedBuffer(provisionRequest.toString().getBytes())).get();
+
+        //Wait for response
+        TimeUnit.SECONDS.sleep(3 * timeoutMultiplier);
+
+        MqttEvent provisionResponseMsg = listener.getEvents().poll(timeoutMultiplier, TimeUnit.SECONDS);
+
+        assertThat(provisionResponseMsg).isNotNull();
+
+        JsonNode provisionResponse = mapper.readTree(provisionResponseMsg.getMessage());
+
+        testRestClient.deleteDeviceIfExists(device.getId());
+        device = testRestClient.getDeviceByName(testDeviceName);
+
+        DeviceCredentials expectedDeviceCredentials = testRestClient.getDeviceCredentialsByDeviceId(device.getId());
+
+        assertThat(provisionResponse.get("credentialsType").asText()).isEqualTo(expectedDeviceCredentials.getCredentialsType().name());
+        assertThat(provisionResponse.get("credentialsValue").asText()).isEqualTo(expectedDeviceCredentials.getCredentialsId());
+        assertThat(provisionResponse.get("status").asText()).isEqualTo("SUCCESS");
+
+        updateDeviceProfileWithProvisioningStrategy(deviceProfile, DeviceProfileProvisionType.DISABLED);
+    }
+
+    @Test
+    public void provisionRequestForCheckSubAckReceived() throws Exception {
+
+        DeviceProfile deviceProfile = testRestClient.getDeviceProfileById(device.getDeviceProfileId());
+        deviceProfile = updateDeviceProfileWithProvisioningStrategy(deviceProfile, DeviceProfileProvisionType.ALLOW_CREATE_NEW_DEVICES);
+
+        MqttMessageListener listener = new MqttMessageListener();
+        MqttClient mqttClient = getMqttClient("provision", listener, MqttVersion.MQTT_5);
+        final MqttReasonCodes.SubAck[] subAckResult = new MqttReasonCodes.SubAck[1];
+        mqttClient.setCallback(new MqttClientCallback() {
+                                   @Override
+                                   public void connectionLost(Throwable cause) {
+                                   }
+
+                                   @Override
+                                   public void onSuccessfulReconnect() {
+                                   }
+
+                                   @Override
+                                   public void onSubAck(MqttSubAckMessage subAckMessage) {
+                                       subAckResult[0] = subAckMessage.payload().typedReasonCodes().get(0);
+                                   }
+                               }
+        );
+
+        mqttClient.on("/provision/response", listener, MqttQoS.AT_LEAST_ONCE).get(3 * timeoutMultiplier, TimeUnit.SECONDS);
+        TimeUnit.SECONDS.sleep(2 * timeoutMultiplier);
+        assertThat(subAckResult[0]).isNotNull();
+        assertThat(MqttReasonCodes.SubAck.GRANTED_QOS_1).isEqualTo(subAckResult[0]);
+
+        subAckResult[0] = null;
+        mqttClient.on("v1/devices/me/attributes", listener, MqttQoS.AT_LEAST_ONCE).get(3 * timeoutMultiplier, TimeUnit.SECONDS);
+        TimeUnit.SECONDS.sleep(2 * timeoutMultiplier);
+        assertThat(subAckResult[0]).isNotNull();
+        assertThat(MqttReasonCodes.SubAck.TOPIC_FILTER_INVALID).isEqualTo(subAckResult[0]);
+
+        testRestClient.deleteDeviceIfExists(device.getId());
+        updateDeviceProfileWithProvisioningStrategy(deviceProfile, DeviceProfileProvisionType.DISABLED);
+    }
+
+
+
+    @Test
+    public void provisionRequestForDeviceWithDisabledProvisioningStrategy() throws Exception {
+
+        MqttMessageListener listener = new MqttMessageListener();
+        MqttClient mqttClient = getMqttClient("provision", listener);
+
+        JsonObject provisionRequest = new JsonObject();
+        provisionRequest.addProperty("provisionDeviceKey", TEST_PROVISION_DEVICE_KEY);
+        provisionRequest.addProperty("provisionDeviceSecret", TEST_PROVISION_DEVICE_SECRET);
+
+        mqttClient.publish("/provision/request", Unpooled.wrappedBuffer(provisionRequest.toString().getBytes())).get();
+
+        //Wait for response
+        TimeUnit.SECONDS.sleep(3 * timeoutMultiplier);
+
+        MqttEvent provisionResponseMsg = listener.getEvents().poll(timeoutMultiplier, TimeUnit.SECONDS);
+
+        assertThat(provisionResponseMsg).isNotNull();
+
+        JsonNode provisionResponse = mapper.readTree(provisionResponseMsg.getMessage());
+
+        assertThat(provisionResponse.get("status").asText()).isEqualTo("NOT_FOUND");
+    }
+
+    @Test
+    public void clientSessionTakenOverDisconnect() throws Exception {
+        DeviceCredentials deviceCredentials = testRestClient.getDeviceCredentialsByDeviceId(device.getId());
+
+        MqttMessageListener listener = new MqttMessageListener();
+        MqttClient mqttClient = getMqttClient(deviceCredentials, listener, MqttVersion.MQTT_5);
+        final List<Byte> returnCodeByteValue = new ArrayList<>();
+        MqttClientCallback callbackForDisconnectWithReturnCode = getCallbackWrapperForDisconnectWithReturnCode(returnCodeByteValue);
+        mqttClient.setCallback(callbackForDisconnectWithReturnCode);
+
+        Thread.sleep(1000);
+
+        MqttMessageListener dummyListener = new MqttMessageListener();
+        MqttClient dummyMqttClient = getMqttClient(deviceCredentials, dummyListener, MqttVersion.MQTT_5);
+        final List<Byte> returnCodeByteValueSecondClient = new ArrayList<>();
+        MqttClientCallback callbackForDisconnectWithReturnCodeDummy = getCallbackWrapperForDisconnectWithReturnCode(returnCodeByteValueSecondClient);
+        dummyMqttClient.setCallback(callbackForDisconnectWithReturnCodeDummy);
+
+        Awaitility
+                .await()
+                .alias("Check device disconnect.")
+                .atMost(TIMEOUT * timeoutMultiplier, TimeUnit.SECONDS)
+                .until(() -> !returnCodeByteValue.isEmpty());
+
+        assertThat(returnCodeByteValueSecondClient).isEmpty();
+        assertThat(returnCodeByteValue).isNotEmpty();
+
+        MqttReasonCodes.Disconnect returnCode = MqttReasonCodes.Disconnect.valueOf(returnCodeByteValue.get(0));
+
+        dummyMqttClient.disconnect();
+
+        assertThat(returnCode).isEqualTo(MqttReasonCodes.Disconnect.SESSION_TAKEN_OVER);
+    }
+
+    @Test
+    public void clientPublishForRegularTopicByProvisionClient() throws Exception {
+        MqttClient mqttClient = getMqttClient("provision", new MqttMessageListener(), MqttVersion.MQTT_5);
+        final List<Byte> returnCodeByteValue = new ArrayList<>();
+        MqttClientCallback callbackForDisconnectWithReturnCode = getCallbackWrapperForDisconnectWithReturnCode(returnCodeByteValue);
+        mqttClient.setCallback(callbackForDisconnectWithReturnCode);
+        mqttClient.publish("v1/devices/me/telemetry", Unpooled.wrappedBuffer("test".getBytes()), MqttQoS.AT_LEAST_ONCE).get();
+        Thread.sleep(1000);
+        assertThat(returnCodeByteValue).isNotEmpty();
+        MqttReasonCodes.Disconnect returnCode = MqttReasonCodes.Disconnect.valueOf(returnCodeByteValue.get(0));
+        assertThat(returnCode).isEqualTo(MqttReasonCodes.Disconnect.TOPIC_NAME_INVALID);
+    }
+
+    @Test
+    public void clientConnectWithBadCredentials() throws Exception {
+        MqttClient mqttClient = getMqttClient("unknownAccessToken", new MqttMessageListener(), MqttVersion.MQTT_5, false);
+        final List<Byte> returnCodeByteValue = new ArrayList<>();
+        MqttClientCallback callbackForDisconnectWithReturnCode = getCallbackWrapperForDisconnectWithReturnCode(returnCodeByteValue);
+        mqttClient.setCallback(callbackForDisconnectWithReturnCode);
+        try {
+            mqttClient.connect(TRANSPORT_HOST, TRANSPORT_PORT).get(1, TimeUnit.SECONDS);
+        } catch (TimeoutException ignored) {
+        }
+        assertThat(returnCodeByteValue).isNotEmpty();
+        MqttConnectReturnCode returnCode = MqttConnectReturnCode.valueOf(returnCodeByteValue.get(0));
+        assertThat(returnCode).isIn(MqttConnectReturnCode.CONNECTION_REFUSED_BAD_USER_NAME_OR_PASSWORD, MqttConnectReturnCode.CONNECTION_REFUSED_BAD_USERNAME_OR_PASSWORD);
     }
 
     private RuleChainId createRootRuleChainForRpcResponse() throws Exception {
         RuleChain newRuleChain = new RuleChain();
         newRuleChain.setName("testRuleChain");
-        ResponseEntity<RuleChain> ruleChainResponse = restClient.getRestTemplate()
-                .postForEntity(HTTPS_URL + "/api/ruleChain",
-                        newRuleChain,
-                        RuleChain.class);
-        Assert.assertTrue(ruleChainResponse.getStatusCode().is2xxSuccessful());
-        RuleChain ruleChain = ruleChainResponse.getBody();
+
+        RuleChain ruleChain = testRestClient.postRuleChain(newRuleChain);
 
         JsonNode configuration = mapper.readTree(this.getClass().getClassLoader().getResourceAsStream("RpcResponseRuleChainMetadata.json"));
         RuleChainMetaData ruleChainMetaData = new RuleChainMetaData();
@@ -354,47 +631,79 @@ public class MqttClientTest extends AbstractContainerTest {
         ruleChainMetaData.setNodes(Arrays.asList(mapper.treeToValue(configuration.get("nodes"), RuleNode[].class)));
         ruleChainMetaData.setConnections(Arrays.asList(mapper.treeToValue(configuration.get("connections"), NodeConnectionInfo[].class)));
 
-        ResponseEntity<RuleChainMetaData> ruleChainMetadataResponse = restClient.getRestTemplate()
-                .postForEntity(HTTPS_URL + "/api/ruleChain/metadata",
-                        ruleChainMetaData,
-                        RuleChainMetaData.class);
-        Assert.assertTrue(ruleChainMetadataResponse.getStatusCode().is2xxSuccessful());
+        testRestClient.postRuleChainMetadata(ruleChainMetaData);
 
         // Set a new rule chain as root
-        ResponseEntity<RuleChain> rootRuleChainResponse = restClient.getRestTemplate()
-                .postForEntity(HTTPS_URL + "/api/ruleChain/{ruleChainId}/root",
-                        null,
-                        RuleChain.class,
-                        ruleChain.getId());
-        Assert.assertTrue(rootRuleChainResponse.getStatusCode().is2xxSuccessful());
-
+        testRestClient.setRootRuleChain(ruleChain.getId());
         return ruleChain.getId();
     }
 
     private RuleChainId getDefaultRuleChainId() {
-        ResponseEntity<PageData<RuleChain>> ruleChains = restClient.getRestTemplate().exchange(
-                HTTPS_URL + "/api/ruleChains?pageSize=40&page=0&textSearch=",
-                HttpMethod.GET,
-                null,
-                new ParameterizedTypeReference<PageData<RuleChain>>() {
-                });
+        PageData<RuleChain> ruleChains = testRestClient.getRuleChains(new PageLink(40, 0));
 
-        Optional<RuleChain> defaultRuleChain = ruleChains.getBody().getData()
+        Optional<RuleChain> defaultRuleChain = ruleChains.getData()
                 .stream()
                 .filter(RuleChain::isRoot)
                 .findFirst();
-        if (!defaultRuleChain.isPresent()) {
-            Assert.fail("Root rule chain wasn't found");
+        if (defaultRuleChain.isEmpty()) {
+            fail("Root rule chain wasn't found");
         }
         return defaultRuleChain.get().getId();
     }
 
+    private MqttClientCallback getCallbackWrapperForDisconnectWithReturnCode(List<Byte> returnCodeByteValueWrapper) {
+        return new MqttClientCallback() {
+            @Override
+            public void connectionLost(Throwable cause) {
+            }
+
+            @Override
+            public void onSuccessfulReconnect() {
+            }
+
+            @Override
+            public void onDisconnect(MqttMessage mqttDisconnectMessage) {
+                log.info("Disconnected with reason: {}", mqttDisconnectMessage);
+                returnCodeByteValueWrapper.add(((MqttReasonCodeAndPropertiesVariableHeader) mqttDisconnectMessage.variableHeader()).reasonCode());
+            }
+        };
+    }
+
     private MqttClient getMqttClient(DeviceCredentials deviceCredentials, MqttMessageListener listener) throws InterruptedException, ExecutionException {
+        return getMqttClient(deviceCredentials.getCredentialsId(), listener, MqttVersion.MQTT_3_1_1, true);
+    }
+
+    private MqttClient getMqttClient(DeviceCredentials deviceCredentials, MqttMessageListener listener, MqttVersion mqttVersion) throws InterruptedException, ExecutionException {
+        return getMqttClient(deviceCredentials.getCredentialsId(), listener, mqttVersion, true);
+    }
+
+    private MqttClient getMqttClient(DeviceCredentials deviceCredentials, MqttMessageListener listener, MqttVersion mqttVersion, boolean connect) throws InterruptedException, ExecutionException {
+        return getMqttClient(deviceCredentials.getCredentialsId(), listener, mqttVersion, connect);
+    }
+
+    private String getOwnerId() {
+        return "Tenant[" + device.getTenantId().getId() + "]MqttClientTestDevice[" + device.getId().getId() + "]";
+    }
+
+    private MqttClient getMqttClient(String username, MqttMessageListener listener) throws InterruptedException, ExecutionException {
+        return getMqttClient(username, listener, MqttVersion.MQTT_3_1_1, true);
+    }
+
+    private MqttClient getMqttClient(String username, MqttMessageListener listener, MqttVersion mqttVersion) throws InterruptedException, ExecutionException {
+        return getMqttClient(username, listener, mqttVersion, true);
+    }
+
+    private MqttClient getMqttClient(String username, MqttMessageListener listener, MqttVersion mqttVersion, boolean connect) throws InterruptedException, ExecutionException {
         MqttClientConfig clientConfig = new MqttClientConfig();
+        clientConfig.setOwnerId(getOwnerId());
         clientConfig.setClientId("MQTT client from test");
-        clientConfig.setUsername(deviceCredentials.getCredentialsId());
-        MqttClient mqttClient = MqttClient.create(clientConfig, listener);
-        mqttClient.connect("localhost", 1883).get();
+        clientConfig.setUsername(username);
+        clientConfig.setProtocolVersion(mqttVersion);
+        clientConfig.setRetransmissionConfig(new MqttClientConfig.RetransmissionConfig(3, 5000L, 0.15d)); // same as defaults in thingsboard.yml as of time of this writing
+        MqttClient mqttClient = MqttClient.create(clientConfig, listener, handlerExecutor);
+        if (connect) {
+            mqttClient.connect(TRANSPORT_HOST, TRANSPORT_PORT).get();
+        }
         return mqttClient;
     }
 
@@ -407,9 +716,10 @@ public class MqttClientTest extends AbstractContainerTest {
         }
 
         @Override
-        public void onMessage(String topic, ByteBuf message) {
+        public ListenableFuture<Void> onMessage(String topic, ByteBuf message) {
             log.info("MQTT message [{}], topic [{}]", message.toString(StandardCharsets.UTF_8), topic);
             events.add(new MqttEvent(topic, message.toString(StandardCharsets.UTF_8)));
+            return Futures.immediateVoidFuture();
         }
     }
 

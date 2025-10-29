@@ -1,5 +1,5 @@
 /**
- * Copyright © 2016-2021 The Thingsboard Authors
+ * Copyright © 2016-2025 The Thingsboard Authors
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -21,12 +21,15 @@ import org.eclipse.californium.core.Utils;
 import org.eclipse.californium.core.network.CoapEndpoint;
 import org.eclipse.californium.elements.DtlsEndpointContext;
 import org.eclipse.californium.elements.EndpointContext;
+import org.eclipse.californium.elements.config.Configuration;
 import org.eclipse.californium.elements.exception.ConnectorException;
 import org.eclipse.californium.elements.util.SslContextUtil;
 import org.eclipse.californium.scandium.DTLSConnector;
 import org.eclipse.californium.scandium.config.DtlsConnectorConfig;
 import org.eclipse.californium.scandium.dtls.CertificateType;
+import org.eclipse.californium.scandium.dtls.x509.SingleCertificateProvider;
 import org.eclipse.californium.scandium.dtls.x509.StaticNewAdvancedCertificateVerifier;
+import org.thingsboard.common.util.ThingsBoardThreadFactory;
 
 import java.io.IOException;
 import java.net.URI;
@@ -41,7 +44,7 @@ import java.util.concurrent.Executors;
 public class SecureClientNoAuth {
 
     private final DTLSConnector dtlsConnector;
-    private ExecutorService executor = Executors.newFixedThreadPool(1);
+    private ExecutorService executor = Executors.newFixedThreadPool(1, ThingsBoardThreadFactory.forName(getClass().getSimpleName()));
     private CoapClient coapClient;
 
     public SecureClientNoAuth(DTLSConnector dtlsConnector, String host, int port, String accessToken, String clientKeys, String sharedKeys) throws URISyntaxException {
@@ -117,7 +120,7 @@ public class SecureClientNoAuth {
         String keyStorePassword = args[6];
 
 
-        DtlsConnectorConfig.Builder builder = new DtlsConnectorConfig.Builder();
+        DtlsConnectorConfig.Builder builder = new DtlsConnectorConfig.Builder(new Configuration());
         setupCredentials(builder, keyStoreUriPath, keyStoreAlias, trustedAliasPattern, keyStorePassword);
         DTLSConnector dtlsConnector = new DTLSConnector(builder.build());
         SecureClientNoAuth client = new SecureClientNoAuth(dtlsConnector, host, port, accessToken, clientKeys, sharedKeys);
@@ -133,7 +136,7 @@ public class SecureClientNoAuth {
                     keyStoreUriPath, trustedAliasPattern, keyStorePassword.toCharArray());
             trustBuilder.setTrustedCertificates(trustedCertificates);
             config.setAdvancedCertificateVerifier(trustBuilder.build());
-            config.setIdentity(serverCredentials.getPrivateKey(), serverCredentials.getCertificateChain(), Collections.singletonList(CertificateType.X_509));
+            config.setCertificateIdentityProvider(new SingleCertificateProvider(serverCredentials.getPrivateKey(), serverCredentials.getCertificateChain(), Collections.singletonList(CertificateType.X_509)));
         } catch (GeneralSecurityException e) {
             System.err.println("certificates are invalid!");
             throw new IllegalArgumentException(e.getMessage());

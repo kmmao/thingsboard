@@ -1,5 +1,5 @@
 /**
- * Copyright © 2016-2021 The Thingsboard Authors
+ * Copyright © 2016-2025 The Thingsboard Authors
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -15,14 +15,22 @@
  */
 package org.thingsboard.server.common.data.lwm2m;
 
+import io.swagger.v3.oas.annotations.media.Schema;
 import lombok.Data;
 
+@Schema
 @Data
 public class LwM2mObject {
+    @Schema(description = "LwM2M Object id.", example = "19")
     int id;
+    @Schema(description = "LwM2M Object key id.", example = "19_1.0")
     String keyId;
+    @Schema(description = "LwM2M Object name.", example = "BinaryAppDataContainer")
     String name;
+    @Schema(description = "LwM2M Object multiple.", example = "true")
     boolean multiple;
+    @Schema(description = "LwM2M Object mandatory.", example = "false")
     boolean mandatory;
+    @Schema(description = "LwM2M Object instances.")
     LwM2mInstance [] instances;
 }

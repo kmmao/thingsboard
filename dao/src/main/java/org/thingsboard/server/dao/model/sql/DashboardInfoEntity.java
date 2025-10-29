@@ -1,5 +1,5 @@
 /**
- * Copyright © 2016-2021 The Thingsboard Authors
+ * Copyright © 2016-2025 The Thingsboard Authors
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -15,25 +15,22 @@
  */
 package org.thingsboard.server.dao.model.sql;
 
-import com.fasterxml.jackson.core.JsonProcessingException;
 import com.fasterxml.jackson.databind.JavaType;
-import com.fasterxml.jackson.databind.ObjectMapper;
+import jakarta.persistence.Column;
+import jakarta.persistence.Entity;
+import jakarta.persistence.Table;
 import lombok.Data;
 import lombok.EqualsAndHashCode;
 import lombok.extern.slf4j.Slf4j;
-import org.springframework.util.StringUtils;
+import org.thingsboard.common.util.JacksonUtil;
 import org.thingsboard.server.common.data.DashboardInfo;
 import org.thingsboard.server.common.data.ShortCustomerInfo;
+import org.thingsboard.server.common.data.StringUtils;
 import org.thingsboard.server.common.data.id.DashboardId;
 import org.thingsboard.server.common.data.id.TenantId;
-import org.thingsboard.server.dao.model.BaseSqlEntity;
+import org.thingsboard.server.dao.model.BaseVersionedEntity;
 import org.thingsboard.server.dao.model.ModelConstants;
-import org.thingsboard.server.dao.model.SearchTextEntity;
 
-import javax.persistence.Column;
-import javax.persistence.Entity;
-import javax.persistence.Table;
-import java.io.IOException;
 import java.util.HashSet;
 import java.util.UUID;
 
@@ -41,12 +38,11 @@ import java.util.UUID;
 @Slf4j
 @EqualsAndHashCode(callSuper = true)
 @Entity
-@Table(name = ModelConstants.DASHBOARD_COLUMN_FAMILY_NAME)
-public class DashboardInfoEntity extends BaseSqlEntity<DashboardInfo> implements SearchTextEntity<DashboardInfo> {
+@Table(name = ModelConstants.DASHBOARD_TABLE_NAME)
+public class DashboardInfoEntity extends BaseVersionedEntity<DashboardInfo> {
 
-    private static final ObjectMapper objectMapper = new ObjectMapper();
     private static final JavaType assignedCustomersType =
-            objectMapper.getTypeFactory().constructCollectionType(HashSet.class, ShortCustomerInfo.class);
+            JacksonUtil.constructCollectionType(HashSet.class, ShortCustomerInfo.class);
 
     @Column(name = ModelConstants.DASHBOARD_TENANT_ID_PROPERTY)
     private UUID tenantId;
@@ -57,21 +53,21 @@ public class DashboardInfoEntity extends BaseSqlEntity<DashboardInfo> implements
     @Column(name = ModelConstants.DASHBOARD_IMAGE_PROPERTY)
     private String image;
 
-    @Column(name = ModelConstants.SEARCH_TEXT_PROPERTY)
-    private String searchText;
-
     @Column(name = ModelConstants.DASHBOARD_ASSIGNED_CUSTOMERS_PROPERTY)
     private String assignedCustomers;
+
+    @Column(name = ModelConstants.DASHBOARD_MOBILE_HIDE_PROPERTY)
+    private boolean mobileHide;
+
+    @Column(name = ModelConstants.DASHBOARD_MOBILE_ORDER_PROPERTY)
+    private Integer mobileOrder;
 
     public DashboardInfoEntity() {
         super();
     }
 
     public DashboardInfoEntity(DashboardInfo dashboardInfo) {
-        if (dashboardInfo.getId() != null) {
-            this.setUuid(dashboardInfo.getId().getId());
-        }
-        this.setCreatedTime(dashboardInfo.getCreatedTime());
+        super(dashboardInfo);
         if (dashboardInfo.getTenantId() != null) {
             this.tenantId = dashboardInfo.getTenantId().getId();
         }
@@ -79,43 +75,34 @@ public class DashboardInfoEntity extends BaseSqlEntity<DashboardInfo> implements
         this.image = dashboardInfo.getImage();
         if (dashboardInfo.getAssignedCustomers() != null) {
             try {
-                this.assignedCustomers = objectMapper.writeValueAsString(dashboardInfo.getAssignedCustomers());
-            } catch (JsonProcessingException e) {
+                this.assignedCustomers = JacksonUtil.toString(dashboardInfo.getAssignedCustomers());
+            } catch (IllegalArgumentException e) {
                 log.error("Unable to serialize assigned customers to string!", e);
             }
         }
-    }
-
-    @Override
-    public String getSearchTextSource() {
-        return title;
-    }
-
-    @Override
-    public void setSearchText(String searchText) {
-        this.searchText = searchText;
-    }
-
-    public String getSearchText() {
-        return searchText;
+        this.mobileHide = dashboardInfo.isMobileHide();
+        this.mobileOrder = dashboardInfo.getMobileOrder();
     }
 
     @Override
     public DashboardInfo toData() {
         DashboardInfo dashboardInfo = new DashboardInfo(new DashboardId(this.getUuid()));
         dashboardInfo.setCreatedTime(createdTime);
+        dashboardInfo.setVersion(version);
         if (tenantId != null) {
-            dashboardInfo.setTenantId(new TenantId(tenantId));
+            dashboardInfo.setTenantId(TenantId.fromUUID(tenantId));
         }
         dashboardInfo.setTitle(title);
         dashboardInfo.setImage(image);
         if (!StringUtils.isEmpty(assignedCustomers)) {
             try {
-                dashboardInfo.setAssignedCustomers(objectMapper.readValue(assignedCustomers, assignedCustomersType));
-            } catch (IOException e) {
+                dashboardInfo.setAssignedCustomers(JacksonUtil.fromString(assignedCustomers, assignedCustomersType));
+            } catch (IllegalArgumentException e) {
                 log.warn("Unable to parse assigned customers!", e);
             }
         }
+        dashboardInfo.setMobileHide(mobileHide);
+        dashboardInfo.setMobileOrder(mobileOrder);
         return dashboardInfo;
     }
 

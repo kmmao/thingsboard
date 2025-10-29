@@ -1,5 +1,5 @@
 /**
- * Copyright © 2016-2021 The Thingsboard Authors
+ * Copyright © 2016-2025 The Thingsboard Authors
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -20,7 +20,10 @@ import lombok.Getter;
 import lombok.Setter;
 import org.thingsboard.server.common.data.Device;
 import org.thingsboard.server.common.data.DeviceProfile;
+import org.thingsboard.server.common.data.device.profile.DeviceProfileTransportConfiguration;
+import org.thingsboard.server.common.data.device.profile.MqttDeviceProfileTransportConfiguration;
 import org.thingsboard.server.common.data.id.DeviceId;
+import org.thingsboard.server.common.data.id.TenantId;
 import org.thingsboard.server.common.transport.auth.TransportDeviceInfo;
 import org.thingsboard.server.gen.transport.TransportProtos;
 
@@ -38,14 +41,17 @@ public abstract class DeviceAwareSessionContext implements SessionContext {
     @Getter
     private volatile DeviceId deviceId;
     @Getter
+    private volatile TenantId tenantId;
+    @Getter
     protected volatile TransportDeviceInfo deviceInfo;
     @Getter
     @Setter
     protected volatile DeviceProfile deviceProfile;
     @Getter
     @Setter
-    private volatile TransportProtos.SessionInfoProto sessionInfo;
+    protected volatile TransportProtos.SessionInfoProto sessionInfo;
 
+    @Setter
     private volatile boolean connected;
 
     public DeviceId getDeviceId() {
@@ -54,8 +60,8 @@ public abstract class DeviceAwareSessionContext implements SessionContext {
 
     public void setDeviceInfo(TransportDeviceInfo deviceInfo) {
         this.deviceInfo = deviceInfo;
-        this.connected = true;
         this.deviceId = deviceInfo.getDeviceId();
+        this.tenantId = deviceInfo.getTenantId();
     }
 
     @Override
@@ -63,7 +69,6 @@ public abstract class DeviceAwareSessionContext implements SessionContext {
         this.sessionInfo = sessionInfo;
         this.deviceProfile = deviceProfile;
         this.deviceInfo.setDeviceType(deviceProfile.getName());
-
     }
 
     @Override
@@ -81,4 +86,14 @@ public abstract class DeviceAwareSessionContext implements SessionContext {
     public void setDisconnected() {
         this.connected = false;
     }
+
+    public boolean isSparkplug() {
+        DeviceProfileTransportConfiguration transportConfiguration = this.deviceProfile.getProfileData().getTransportConfiguration();
+        if (transportConfiguration instanceof MqttDeviceProfileTransportConfiguration) {
+            return ((MqttDeviceProfileTransportConfiguration) transportConfiguration).isSparkplug();
+        } else {
+            return false;
+        }
+    }
+
 }

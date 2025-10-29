@@ -1,5 +1,5 @@
 /**
- * Copyright © 2016-2021 The Thingsboard Authors
+ * Copyright © 2016-2025 The Thingsboard Authors
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -15,19 +15,27 @@
  */
 package org.thingsboard.server.common.data.lwm2m;
 
+import io.swagger.v3.oas.annotations.media.Schema;
 import lombok.AllArgsConstructor;
 import lombok.Data;
 
 import java.util.stream.Stream;
 
+@Schema
 @Data
 @AllArgsConstructor
 public class LwM2mResourceObserve {
+    @Schema(description = "LwM2M Resource Observe id.", example = "0")
     int id;
+    @Schema(description = "LwM2M Resource Observe name.", example = "Data")
     String name;
+    @Schema(description = "LwM2M Resource Observe observe.", example = "false")
     boolean observe;
+    @Schema(description = "LwM2M Resource Observe attribute.", example = "false")
     boolean attribute;
+    @Schema(description = "LwM2M Resource Observe telemetry.", example = "false")
     boolean telemetry;
+    @Schema(description = "LwM2M Resource Observe key name.", example = "data")
     String keyName;
 
     public LwM2mResourceObserve(int id, String name, boolean observe, boolean attribute, boolean telemetry) {

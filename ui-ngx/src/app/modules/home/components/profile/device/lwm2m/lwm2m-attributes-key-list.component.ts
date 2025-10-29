@@ -1,5 +1,5 @@
 ///
-/// Copyright © 2016-2021 The Thingsboard Authors
+/// Copyright © 2016-2025 The Thingsboard Authors
 ///
 /// Licensed under the Apache License, Version 2.0 (the "License");
 /// you may not use this file except in compliance with the License.
@@ -14,35 +14,36 @@
 /// limitations under the License.
 ///
 
-import { Component, forwardRef, Input, OnInit } from '@angular/core';
+import { Component, forwardRef, Input, OnDestroy } from '@angular/core';
 import {
   AbstractControl,
   ControlValueAccessor,
-  FormArray,
-  FormBuilder,
-  FormControl,
-  FormGroup,
+  UntypedFormArray,
+  UntypedFormBuilder,
+  UntypedFormGroup,
   NG_VALIDATORS,
   NG_VALUE_ACCESSOR,
   Validator,
   Validators
 } from '@angular/forms';
-import { Subscription } from 'rxjs';
+import { Subject } from 'rxjs';
 import {
-  ATTRIBUTE_KEYS,
-  ATTRIBUTE_LWM2M_ENUM,
-  ATTRIBUTE_LWM2M_MAP
+  AttributeName,
+  AttributeNameTranslationMap,
+  AttributesNameValue,
+  AttributesNameValueMap,
+  valueValidatorByAttributeName
 } from './lwm2m-profile-config.models';
-import { isDefinedAndNotNull, isEmpty, isEmptyStr, isUndefinedOrNull } from '@core/utils';
+import { isUndefinedOrNull } from '@core/utils';
 import { Store } from '@ngrx/store';
 import { AppState } from '@core/core.state';
 import { PageComponent } from '@shared/components/page.component';
-
+import { takeUntil } from 'rxjs/operators';
 
 @Component({
   selector: 'tb-lwm2m-attributes-key-list',
   templateUrl: './lwm2m-attributes-key-list.component.html',
-  styleUrls: ['./lwm2m-attributes.component.scss'],
+  styleUrls: ['./lwm2m-attributes-key-list.component.scss'],
   providers: [
     {
       provide: NG_VALUE_ACCESSOR,
@@ -56,39 +57,45 @@ import { PageComponent } from '@shared/components/page.component';
     }
   ]
 })
-export class Lwm2mAttributesKeyListComponent extends PageComponent implements ControlValueAccessor, OnInit, Validator {
+export class Lwm2mAttributesKeyListComponent extends PageComponent implements ControlValueAccessor, OnDestroy, OnDestroy, Validator {
 
-  attrKeys = ATTRIBUTE_KEYS;
-
-  attrKey = ATTRIBUTE_LWM2M_ENUM;
-
-  attributeLwm2mMap = ATTRIBUTE_LWM2M_MAP;
+  attributeNames;
+  attributeNameTranslationMap = AttributeNameTranslationMap;
 
   @Input() disabled: boolean;
 
-  @Input() titleText: string;
+  @Input()
+  isResource = false;
 
-  @Input() noDataText: string;
-
-  kvListFormGroup: FormGroup;
+  attributesValueFormGroup: UntypedFormGroup;
 
   private propagateChange = null;
-
-  private valueChangeSubscription: Subscription = null;
+  private destroy$ = new Subject<void>();
+  private usedAttributesName: AttributeName[] = [];
 
   constructor(protected store: Store<AppState>,
-              private fb: FormBuilder) {
+              private fb: UntypedFormBuilder) {
     super(store);
+    this.attributesValueFormGroup = this.fb.group({
+      attributesValue: this.fb.array([])
+    });
+    this.attributesValueFormGroup.valueChanges.pipe(
+      takeUntil(this.destroy$)
+    ).subscribe(() => this.updateModel());
   }
 
-  ngOnInit(): void {
-    this.kvListFormGroup = this.fb.group({});
-    this.kvListFormGroup.addControl('keyVals',
-      this.fb.array([]));
+  ngOnInit() {
+    if (this.isResource) {
+      this.attributeNames = Object.values(AttributeName);
+    } else {
+      this.attributeNames = Object.values(AttributeName)
+        .filter(item => ![AttributeName.lt, AttributeName.gt, AttributeName.st].includes(item));
+    }
   }
 
-  keyValsFormArray(): FormArray {
-    return this.kvListFormGroup.get('keyVals') as FormArray;
+  ngOnDestroy() {
+    this.destroy$.next();
+    this.destroy$.complete();
   }
 
   registerOnChange(fn: any): void {
@@ -101,127 +108,105 @@ export class Lwm2mAttributesKeyListComponent extends PageComponent implements Co
   setDisabledState(isDisabled: boolean): void {
     this.disabled = isDisabled;
     if (this.disabled) {
-      this.kvListFormGroup.disable({emitEvent: false});
+      this.attributesValueFormGroup.disable({emitEvent: false});
     } else {
-      this.kvListFormGroup.enable({emitEvent: false});
+      this.attributesValueFormGroup.enable({emitEvent: false});
     }
   }
 
-  writeValue(keyValMap: { [key: string]: string }): void {
-    if (this.valueChangeSubscription) {
-      this.valueChangeSubscription.unsubscribe();
-    }
-    const keyValsControls: Array<AbstractControl> = [];
+  writeValue(keyValMap: AttributesNameValueMap): void {
+    const attributesValueControls: Array<AbstractControl> = [];
     if (keyValMap) {
-      for (const property of Object.keys(keyValMap)) {
-        if (Object.prototype.hasOwnProperty.call(keyValMap, property)) {
-          keyValsControls.push(this.fb.group({
-            key: [property, [Validators.required, this.attributeLwm2mKeyValidator]],
-            value: [keyValMap[property], this.attributeLwm2mValueValidator(property)]
-          }));
-        }
-      }
+      (Object.keys(keyValMap) as AttributeName[]).forEach(name => {
+        attributesValueControls.push(this.createdFormGroup({name, value: keyValMap[name]}));
+      });
     }
-    this.kvListFormGroup.setControl('keyVals', this.fb.array(keyValsControls));
-    this.valueChangeSubscription = this.kvListFormGroup.valueChanges.subscribe(() => {
-      // this.updateValidate();
-      this.updateModel();
-    });
+    this.attributesValueFormGroup.setControl('attributesValue', this.fb.array(attributesValueControls), {emitEvent: false});
     if (this.disabled) {
-      this.kvListFormGroup.disable({emitEvent: false});
+      this.attributesValueFormGroup.disable({emitEvent: false});
     } else {
-      this.kvListFormGroup.enable({emitEvent: false});
+      this.attributesValueFormGroup.enable({emitEvent: false});
     }
+    this.updateUsedAttributesName();
+  }
+
+  attributesValueFormArray(): UntypedFormArray {
+    return this.attributesValueFormGroup.get('attributesValue') as UntypedFormArray;
   }
 
   public removeKeyVal(index: number) {
-    (this.kvListFormGroup.get('keyVals') as FormArray).removeAt(index);
+    this.attributesValueFormArray().removeAt(index);
   }
 
   public addKeyVal() {
-    const keyValsFormArray = this.kvListFormGroup.get('keyVals') as FormArray;
-    keyValsFormArray.push(this.fb.group({
-      key: ['', [Validators.required, this.attributeLwm2mKeyValidator]],
-      value: ['', []]
-    }));
+    this.attributesValueFormArray().push(this.createdFormGroup());
+    this.attributesValueFormGroup.updateValueAndValidity({emitEvent: false});
+    if (this.attributesValueFormGroup.invalid) {
+      this.updateModel();
+    }
   }
 
-  public validate(c?: FormControl) {
-    const kvList: { key: string; value: string }[] = this.kvListFormGroup.get('keyVals').value;
-    let valid = true;
-    for (const entry of kvList) {
-      if (isUndefinedOrNull(entry.key) || isEmptyStr(entry.key) || !ATTRIBUTE_KEYS.includes(entry.key)) {
-        valid = false;
-        break;
-      }
-      if (entry.key !== 'ver' && isNaN(Number(entry.value))) {
-        valid = false;
-        break;
-      }
+  private createdFormGroup(value?: AttributesNameValue): UntypedFormGroup {
+    if (isUndefinedOrNull(value)) {
+      value = {
+        name: this.getFirstUnusedAttributesName(),
+        value: null
+      };
     }
-    return (valid) ? null : {
-      keyVals: {
-        valid: false,
-      },
+    const form = this.fb.group({
+      name: [value.name, Validators.required],
+      value: [value.value, valueValidatorByAttributeName(value.name)]
+    });
+    form.get('name').valueChanges.pipe(
+      takeUntil(this.destroy$)
+    ).subscribe(name => {
+      form.get('value').setValidators(valueValidatorByAttributeName(name));
+      form.get('value').updateValueAndValidity();
+    });
+    return form;
+  }
+
+  public validate() {
+    return this.attributesValueFormGroup.valid ? null : {
+      attributesValue: {
+        valid: false
+      }
     };
   }
 
-  private updateValidate() {
-    const kvList = this.kvListFormGroup.get('keyVals') as FormArray;
-    kvList.controls.forEach(fg => {
-      if (fg.get('key').value === 'ver') {
-        fg.get('value').setValidators(null);
-        fg.get('value').setErrors(null);
+  private updateModel() {
+    const value: AttributesNameValue[] = this.attributesValueFormGroup.get('attributesValue').value;
+    const attributesNameValueMap: AttributesNameValueMap = {};
+    value.forEach(attribute => {
+      attributesNameValueMap[attribute.name] = attribute.value;
+    });
+    this.updateUsedAttributesName();
+    this.propagateChange(attributesNameValueMap);
+  }
+
+  public isDisabledAttributeName(type: AttributeName, index: number): boolean {
+    const usedIndex = this.usedAttributesName.indexOf(type);
+    return usedIndex > -1 && usedIndex !== index;
+  }
+
+  private getFirstUnusedAttributesName(): AttributeName {
+    for (const attributeName of this.attributeNames) {
+      if (this.usedAttributesName.indexOf(attributeName) === -1) {
+        return attributeName;
       }
-      else {
-        fg.get('value').setValidators(this.attributeLwm2mValueNumberValidator);
-        fg.get('value').setErrors(this.attributeLwm2mValueNumberValidator(fg.get('value')));
-      }
+    }
+    return null;
+  }
+
+  private updateUsedAttributesName() {
+    this.usedAttributesName = [];
+    const value: AttributesNameValue[] = this.attributesValueFormGroup.get('attributesValue').value;
+    value.forEach((attributesValue, index) => {
+      this.usedAttributesName[index] = attributesValue.name;
     });
   }
 
-  private updateModel() {
-    this.updateValidate();
-    if (this.validate() === null) {
-      const kvList: { key: string; value: string }[] = this.kvListFormGroup.get('keyVals').value;
-      const keyValMap: { [key: string]: string | number } = {};
-      kvList.forEach((entry) => {
-        if (isUndefinedOrNull(entry.value) || entry.key === 'ver' || isEmptyStr(entry.value.toString())) {
-          keyValMap[entry.key] = entry.value.toString();
-        } else {
-          keyValMap[entry.key] = Number(entry.value);
-        }
-      });
-      this.propagateChange(keyValMap);
-    }
-    else {
-      this.propagateChange(null);
-    }
-  }
-
-
-  private attributeLwm2mKeyValidator = (control: AbstractControl) => {
-    const key = control.value as string;
-    if (isDefinedAndNotNull(key) && !isEmpty(key)) {
-      if (!ATTRIBUTE_KEYS.includes(key)) {
-        return {
-          validAttributeKey: true
-        };
-      }
-    }
-    return null;
-  }
-
-  private attributeLwm2mValueNumberValidator = (control: AbstractControl) => {
-    if (isNaN(Number(control.value)) || Number(control.value) < 0) {
-      return {
-        validAttributeValue: true
-      };
-    }
-    return null;
-  }
-
-  private attributeLwm2mValueValidator = (property: string): object[] => {
-    return property === 'ver' ?  [] : [this.attributeLwm2mValueNumberValidator];
+  get isAddEnabled(): boolean {
+    return this.attributesValueFormArray().length !== this.attributeNames.length;
   }
 }

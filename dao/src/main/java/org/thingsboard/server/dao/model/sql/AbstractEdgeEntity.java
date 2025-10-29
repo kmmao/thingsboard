@@ -1,5 +1,5 @@
 /**
- * Copyright © 2016-2021 The Thingsboard Authors
+ * Copyright © 2016-2025 The Thingsboard Authors
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -15,43 +15,36 @@
  */
 package org.thingsboard.server.dao.model.sql;
 
-import com.datastax.oss.driver.api.core.uuid.Uuids;
 import com.fasterxml.jackson.databind.JsonNode;
+import jakarta.persistence.Column;
+import jakarta.persistence.Convert;
+import jakarta.persistence.MappedSuperclass;
 import lombok.Data;
 import lombok.EqualsAndHashCode;
-import org.hibernate.annotations.Type;
-import org.hibernate.annotations.TypeDef;
 import org.thingsboard.server.common.data.edge.Edge;
 import org.thingsboard.server.common.data.id.CustomerId;
 import org.thingsboard.server.common.data.id.EdgeId;
 import org.thingsboard.server.common.data.id.RuleChainId;
 import org.thingsboard.server.common.data.id.TenantId;
-import org.thingsboard.server.dao.model.BaseSqlEntity;
+import org.thingsboard.server.dao.model.BaseVersionedEntity;
 import org.thingsboard.server.dao.model.ModelConstants;
-import org.thingsboard.server.dao.model.SearchTextEntity;
-import org.thingsboard.server.dao.util.mapping.JsonStringType;
+import org.thingsboard.server.dao.util.mapping.JsonConverter;
 
-import javax.persistence.Column;
-import javax.persistence.MappedSuperclass;
 import java.util.UUID;
 
-import static org.thingsboard.server.dao.model.ModelConstants.EDGE_CLOUD_ENDPOINT_KEY_PROPERTY;
 import static org.thingsboard.server.dao.model.ModelConstants.EDGE_CUSTOMER_ID_PROPERTY;
 import static org.thingsboard.server.dao.model.ModelConstants.EDGE_LABEL_PROPERTY;
-import static org.thingsboard.server.dao.model.ModelConstants.EDGE_LICENSE_KEY_PROPERTY;
 import static org.thingsboard.server.dao.model.ModelConstants.EDGE_NAME_PROPERTY;
 import static org.thingsboard.server.dao.model.ModelConstants.EDGE_ROOT_RULE_CHAIN_ID_PROPERTY;
 import static org.thingsboard.server.dao.model.ModelConstants.EDGE_ROUTING_KEY_PROPERTY;
 import static org.thingsboard.server.dao.model.ModelConstants.EDGE_SECRET_PROPERTY;
 import static org.thingsboard.server.dao.model.ModelConstants.EDGE_TENANT_ID_PROPERTY;
 import static org.thingsboard.server.dao.model.ModelConstants.EDGE_TYPE_PROPERTY;
-import static org.thingsboard.server.dao.model.ModelConstants.SEARCH_TEXT_PROPERTY;
 
 @Data
 @EqualsAndHashCode(callSuper = true)
-@TypeDef(name = "json", typeClass = JsonStringType.class)
 @MappedSuperclass
-public abstract class AbstractEdgeEntity<T extends Edge> extends BaseSqlEntity<T> implements SearchTextEntity<T> {
+public abstract class AbstractEdgeEntity<T extends Edge> extends BaseVersionedEntity<T> {
 
     @Column(name = EDGE_TENANT_ID_PROPERTY, columnDefinition = "uuid")
     private UUID tenantId;
@@ -71,22 +64,13 @@ public abstract class AbstractEdgeEntity<T extends Edge> extends BaseSqlEntity<T
     @Column(name = EDGE_LABEL_PROPERTY)
     private String label;
 
-    @Column(name = SEARCH_TEXT_PROPERTY)
-    private String searchText;
-
     @Column(name = EDGE_ROUTING_KEY_PROPERTY)
     private String routingKey;
 
     @Column(name = EDGE_SECRET_PROPERTY)
     private String secret;
 
-    @Column(name = EDGE_LICENSE_KEY_PROPERTY)
-    private String edgeLicenseKey;
-
-    @Column(name = EDGE_CLOUD_ENDPOINT_KEY_PROPERTY)
-    private String cloudEndpoint;
-
-    @Type(type = "json")
+    @Convert(converter = JsonConverter.class)
     @Column(name = ModelConstants.EDGE_ADDITIONAL_INFO_PROPERTY)
     private JsonNode additionalInfo;
 
@@ -94,11 +78,8 @@ public abstract class AbstractEdgeEntity<T extends Edge> extends BaseSqlEntity<T
         super();
     }
 
-    public AbstractEdgeEntity(Edge edge) {
-        if (edge.getId() != null) {
-            this.setUuid(edge.getId().getId());
-        }
-        this.setCreatedTime(edge.getCreatedTime());
+    public AbstractEdgeEntity(T edge) {
+        super(edge);
         if (edge.getTenantId() != null) {
             this.tenantId = edge.getTenantId().getId();
         }
@@ -113,47 +94,28 @@ public abstract class AbstractEdgeEntity<T extends Edge> extends BaseSqlEntity<T
         this.label = edge.getLabel();
         this.routingKey = edge.getRoutingKey();
         this.secret = edge.getSecret();
-        this.edgeLicenseKey = edge.getEdgeLicenseKey();
-        this.cloudEndpoint = edge.getCloudEndpoint();
         this.additionalInfo = edge.getAdditionalInfo();
     }
 
     public AbstractEdgeEntity(EdgeEntity edgeEntity) {
-        this.setId(edgeEntity.getId());
-        this.setCreatedTime(edgeEntity.getCreatedTime());
+        super(edgeEntity);
         this.tenantId = edgeEntity.getTenantId();
         this.customerId = edgeEntity.getCustomerId();
         this.rootRuleChainId = edgeEntity.getRootRuleChainId();
         this.type = edgeEntity.getType();
         this.name = edgeEntity.getName();
         this.label = edgeEntity.getLabel();
-        this.searchText = edgeEntity.getSearchText();
         this.routingKey = edgeEntity.getRoutingKey();
         this.secret = edgeEntity.getSecret();
-        this.edgeLicenseKey = edgeEntity.getEdgeLicenseKey();
-        this.cloudEndpoint = edgeEntity.getCloudEndpoint();
         this.additionalInfo = edgeEntity.getAdditionalInfo();
-    }
-
-    public String getSearchText() {
-        return searchText;
-    }
-
-    @Override
-    public String getSearchTextSource() {
-        return name;
-    }
-
-    @Override
-    public void setSearchText(String searchText) {
-        this.searchText = searchText;
     }
 
     protected Edge toEdge() {
         Edge edge = new Edge(new EdgeId(getUuid()));
         edge.setCreatedTime(createdTime);
+        edge.setVersion(version);
         if (tenantId != null) {
-            edge.setTenantId(new TenantId(tenantId));
+            edge.setTenantId(TenantId.fromUUID(tenantId));
         }
         if (customerId != null) {
             edge.setCustomerId(new CustomerId(customerId));
@@ -166,9 +128,8 @@ public abstract class AbstractEdgeEntity<T extends Edge> extends BaseSqlEntity<T
         edge.setLabel(label);
         edge.setRoutingKey(routingKey);
         edge.setSecret(secret);
-        edge.setEdgeLicenseKey(edgeLicenseKey);
-        edge.setCloudEndpoint(cloudEndpoint);
         edge.setAdditionalInfo(additionalInfo);
         return edge;
     }
+
 }

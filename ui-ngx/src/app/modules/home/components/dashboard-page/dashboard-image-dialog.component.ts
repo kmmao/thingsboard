@@ -1,5 +1,5 @@
 ///
-/// Copyright © 2016-2021 The Thingsboard Authors
+/// Copyright © 2016-2025 The Thingsboard Authors
 ///
 /// Licensed under the Apache License, Version 2.0 (the "License");
 /// you may not use this file except in compliance with the License.
@@ -18,7 +18,7 @@ import { Component, Inject } from '@angular/core';
 import { MAT_DIALOG_DATA, MatDialogRef } from '@angular/material/dialog';
 import { Store } from '@ngrx/store';
 import { AppState } from '@core/core.state';
-import { FormBuilder, FormGroup, Validators } from '@angular/forms';
+import { UntypedFormBuilder, UntypedFormGroup, Validators } from '@angular/forms';
 import { Router } from '@angular/router';
 import { DialogComponent } from '@app/shared/components/dialog.component';
 import { DashboardId } from '@shared/models/id/dashboard-id';
@@ -28,6 +28,7 @@ import html2canvas from 'html2canvas';
 import { map, share } from 'rxjs/operators';
 import { BehaviorSubject, from } from 'rxjs';
 import { isNumber } from '@core/utils';
+import { takeUntilDestroyed } from '@angular/core/rxjs-interop';
 
 export interface DashboardImageDialogData {
   dashboardId: DashboardId;
@@ -53,11 +54,11 @@ export class DashboardImageDialogComponent extends DialogComponent<DashboardImag
   );
 
   dashboardId: DashboardId;
-  safeImageUrl?: SafeUrl;
+  imageUrl?: string;
   dashboardElement: HTMLElement;
 
-  dashboardRectFormGroup: FormGroup;
-  dashboardImageFormGroup: FormGroup;
+  dashboardRectFormGroup: UntypedFormGroup;
+  dashboardImageFormGroup: UntypedFormGroup;
 
   constructor(protected store: Store<AppState>,
               protected router: Router,
@@ -65,7 +66,7 @@ export class DashboardImageDialogComponent extends DialogComponent<DashboardImag
               public dialogRef: MatDialogRef<DashboardImageDialogComponent, DashboardImageDialogResult>,
               private dashboardService: DashboardService,
               private sanitizer: DomSanitizer,
-              private fb: FormBuilder) {
+              private fb: UntypedFormBuilder) {
     super(store, router, dialogRef);
 
     this.dashboardId = this.data.dashboardId;
@@ -84,7 +85,9 @@ export class DashboardImageDialogComponent extends DialogComponent<DashboardImag
       dashboardImage: [this.data.currentImage]
     });
 
-    this.dashboardImageFormGroup.get('dashboardImage').valueChanges.subscribe(
+    this.dashboardImageFormGroup.get('dashboardImage').valueChanges.pipe(
+      takeUntilDestroyed()
+    ).subscribe(
       (newImage) => {
         this.updateImage(newImage);
       }
@@ -165,10 +168,6 @@ export class DashboardImageDialogComponent extends DialogComponent<DashboardImag
   }
 
   private updateImage(imageUrl: string) {
-    if (imageUrl) {
-      this.safeImageUrl = this.sanitizer.bypassSecurityTrustUrl(imageUrl);
-    } else {
-      this.safeImageUrl = null;
-    }
+    this.imageUrl = imageUrl;
   }
 }

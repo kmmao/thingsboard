@@ -1,5 +1,5 @@
 /**
- * Copyright © 2016-2021 The Thingsboard Authors
+ * Copyright © 2016-2025 The Thingsboard Authors
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -15,7 +15,6 @@
  */
 package org.thingsboard.server.service.security.auth.oauth2;
 
-import com.fasterxml.jackson.databind.ObjectMapper;
 import com.fasterxml.jackson.databind.node.ObjectNode;
 import lombok.Getter;
 import lombok.extern.slf4j.Slf4j;
@@ -24,20 +23,20 @@ import org.springframework.beans.factory.annotation.Value;
 import org.springframework.security.authentication.UsernamePasswordAuthenticationToken;
 import org.springframework.security.core.userdetails.UsernameNotFoundException;
 import org.springframework.security.crypto.bcrypt.BCryptPasswordEncoder;
-import org.springframework.util.StringUtils;
+import org.thingsboard.common.util.JacksonUtil;
 import org.thingsboard.server.common.data.Customer;
 import org.thingsboard.server.common.data.DashboardInfo;
+import org.thingsboard.server.common.data.StringUtils;
 import org.thingsboard.server.common.data.Tenant;
 import org.thingsboard.server.common.data.User;
 import org.thingsboard.server.common.data.id.CustomerId;
 import org.thingsboard.server.common.data.id.DashboardId;
 import org.thingsboard.server.common.data.id.IdBased;
 import org.thingsboard.server.common.data.id.TenantId;
-import org.thingsboard.server.common.data.oauth2.OAuth2ClientRegistrationInfo;
+import org.thingsboard.server.common.data.oauth2.OAuth2Client;
 import org.thingsboard.server.common.data.oauth2.OAuth2MapperConfig;
 import org.thingsboard.server.common.data.page.PageData;
 import org.thingsboard.server.common.data.page.PageLink;
-import org.thingsboard.server.common.data.plugin.ComponentLifecycleEvent;
 import org.thingsboard.server.common.data.security.Authority;
 import org.thingsboard.server.common.data.security.UserCredentials;
 import org.thingsboard.server.dao.customer.CustomerService;
@@ -46,22 +45,19 @@ import org.thingsboard.server.dao.oauth2.OAuth2User;
 import org.thingsboard.server.dao.tenant.TbTenantProfileCache;
 import org.thingsboard.server.dao.tenant.TenantService;
 import org.thingsboard.server.dao.user.UserService;
-import org.thingsboard.server.service.install.InstallScripts;
-import org.thingsboard.server.service.queue.TbClusterService;
+import org.thingsboard.server.service.entitiy.tenant.TbTenantService;
+import org.thingsboard.server.service.entitiy.user.TbUserService;
 import org.thingsboard.server.service.security.model.SecurityUser;
 import org.thingsboard.server.service.security.model.UserPrincipal;
 
-import java.io.IOException;
-import java.util.List;
 import java.util.Optional;
 import java.util.concurrent.locks.Lock;
 import java.util.concurrent.locks.ReentrantLock;
 
 @Slf4j
 public abstract class AbstractOAuth2ClientMapper {
-    private static final int DASHBOARDS_REQUEST_LIMIT = 10;
 
-    private static final ObjectMapper objectMapper = new ObjectMapper();
+    private static final int DASHBOARDS_REQUEST_LIMIT = 10;
 
     @Autowired
     private UserService userService;
@@ -73,29 +69,29 @@ public abstract class AbstractOAuth2ClientMapper {
     private TenantService tenantService;
 
     @Autowired
+    private TbTenantService tbTenantService;
+
+    @Autowired
     private CustomerService customerService;
 
     @Autowired
     private DashboardService dashboardService;
 
     @Autowired
-    private InstallScripts installScripts;
+    private TbUserService tbUserService;
 
     @Autowired
     protected TbTenantProfileCache tenantProfileCache;
 
-    @Autowired
-    protected TbClusterService tbClusterService;
-
     @Value("${edges.enabled}")
     @Getter
     private boolean edgesEnabled;
-    
+
     private final Lock userCreationLock = new ReentrantLock();
 
-    protected SecurityUser getOrCreateSecurityUserFromOAuth2User(OAuth2User oauth2User, OAuth2ClientRegistrationInfo clientRegistration) {
+    protected SecurityUser getOrCreateSecurityUserFromOAuth2User(OAuth2User oauth2User, OAuth2Client oAuth2Client) {
 
-        OAuth2MapperConfig config = clientRegistration.getMapperConfig();
+        OAuth2MapperConfig config = oAuth2Client.getMapperConfig();
 
         UserPrincipal principal = new UserPrincipal(UserPrincipal.Type.USER_NAME, oauth2User.getEmail());
 
@@ -116,8 +112,7 @@ public abstract class AbstractOAuth2ClientMapper {
                     } else {
                         user.setAuthority(Authority.CUSTOMER_USER);
                     }
-                    TenantId tenantId = oauth2User.getTenantId() != null ?
-                            oauth2User.getTenantId() : getTenantId(oauth2User.getTenantName());
+                    TenantId tenantId = oauth2User.getTenantId() != null ? oauth2User.getTenantId() : getTenantId(oauth2User.getTenantName());
                     user.setTenantId(tenantId);
                     CustomerId customerId = oauth2User.getCustomerId() != null ?
                             oauth2User.getCustomerId() : getCustomerId(user.getTenantId(), oauth2User.getCustomerName());
@@ -126,7 +121,7 @@ public abstract class AbstractOAuth2ClientMapper {
                     user.setFirstName(oauth2User.getFirstName());
                     user.setLastName(oauth2User.getLastName());
 
-                    ObjectNode additionalInfo = objectMapper.createObjectNode();
+                    ObjectNode additionalInfo = JacksonUtil.newObjectNode();
 
                     if (!StringUtils.isEmpty(oauth2User.getDefaultDashboardName())) {
                         Optional<DashboardId> dashboardIdOpt =
@@ -139,14 +134,14 @@ public abstract class AbstractOAuth2ClientMapper {
                         }
                     }
 
-                    if (clientRegistration.getAdditionalInfo() != null &&
-                            clientRegistration.getAdditionalInfo().has("providerName")) {
-                        additionalInfo.put("authProviderName", clientRegistration.getAdditionalInfo().get("providerName").asText());
+                    if (oAuth2Client.getAdditionalInfo() != null &&
+                            oAuth2Client.getAdditionalInfo().has("providerName")) {
+                        additionalInfo.put("authProviderName", oAuth2Client.getAdditionalInfo().get("providerName").asText());
                     }
 
                     user.setAdditionalInfo(additionalInfo);
 
-                    user = userService.saveUser(user);
+                    user = tbUserService.save(tenantId, customerId, user, false, null, null);
                     if (config.isActivateUser()) {
                         UserCredentials userCredentials = userService.findUserCredentialsByUserId(user.getTenantId(), user.getId());
                         userService.activateUserCredentials(user.getTenantId(), userCredentials.getActivateToken(), passwordEncoder.encode(""));
@@ -169,25 +164,15 @@ public abstract class AbstractOAuth2ClientMapper {
         }
     }
 
-    private TenantId getTenantId(String tenantName) throws IOException {
-        List<Tenant> tenants = tenantService.findTenants(new PageLink(1, 0, tenantName)).getData();
-        Tenant tenant;
-        if (tenants == null || tenants.isEmpty()) {
-            tenant = new Tenant();
-            tenant.setTitle(tenantName);
-            tenant = tenantService.saveTenant(tenant);
-            installScripts.createDefaultRuleChains(tenant.getId());
-            if (edgesEnabled) {
-                installScripts.createDefaultEdgeRuleChains(tenant.getId());
-            }
-            tenantProfileCache.evict(tenant.getId());
-            tbClusterService.onTenantChange(tenant, null);
-            tbClusterService.onEntityStateChange(tenant.getId(), tenant.getId(),
-                    ComponentLifecycleEvent.CREATED);
-        } else {
-            tenant = tenants.get(0);
+    private TenantId getTenantId(String name) throws Exception {
+        Tenant tenant = tenantService.findTenantByName(name);
+        if (tenant != null) {
+            return tenant.getId();
         }
-        return tenant.getTenantId();
+        tenant = new Tenant();
+        tenant.setTitle(name);
+        tenant = tbTenantService.save(tenant);
+        return tenant.getId();
     }
 
     private CustomerId getCustomerId(TenantId tenantId, String customerName) {
@@ -206,11 +191,7 @@ public abstract class AbstractOAuth2ClientMapper {
     }
 
     private Optional<DashboardId> getDashboardId(TenantId tenantId, String dashboardName) {
-        PageLink searchTextLink = new PageLink(1, 0, dashboardName);
-        PageData<DashboardInfo> dashboardsPage = dashboardService.findDashboardsByTenantId(tenantId, searchTextLink);
-        return dashboardsPage.getData().stream()
-                .findAny()
-                .map(IdBased::getId);
+        return Optional.ofNullable(dashboardService.findFirstDashboardInfoByTenantIdAndName(tenantId, dashboardName)).map(IdBased::getId);
     }
 
     private Optional<DashboardId> getDashboardId(TenantId tenantId, CustomerId customerId, String dashboardName) {
@@ -228,4 +209,5 @@ public abstract class AbstractOAuth2ClientMapper {
         } while (dashboardsPage.hasNext());
         return Optional.empty();
     }
+
 }

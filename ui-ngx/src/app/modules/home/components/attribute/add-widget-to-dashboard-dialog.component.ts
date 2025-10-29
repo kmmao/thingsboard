@@ -1,5 +1,5 @@
 ///
-/// Copyright © 2016-2021 The Thingsboard Authors
+/// Copyright © 2016-2025 The Thingsboard Authors
 ///
 /// Licensed under the Apache License, Version 2.0 (the "License");
 /// you may not use this file except in compliance with the License.
@@ -19,7 +19,7 @@ import { ErrorStateMatcher } from '@angular/material/core';
 import { MAT_DIALOG_DATA, MatDialog, MatDialogRef } from '@angular/material/dialog';
 import { Store } from '@ngrx/store';
 import { AppState } from '@core/core.state';
-import { FormBuilder, FormControl, FormGroup, FormGroupDirective, NgForm, Validators } from '@angular/forms';
+import { UntypedFormBuilder, UntypedFormControl, UntypedFormGroup, FormGroupDirective, NgForm, Validators } from '@angular/forms';
 import { Router } from '@angular/router';
 import { DialogComponent } from '@app/shared/components/dialog.component';
 import { UtilsService } from '@core/services/utils.service';
@@ -40,6 +40,7 @@ import { AliasesInfo } from '@shared/models/alias.models';
 import { ItemBufferService } from '@core/services/item-buffer.service';
 import { StateObject } from '@core/api/widget-api.models';
 import { FiltersInfo } from '@shared/models/query/query.models';
+import { takeUntilDestroyed } from '@angular/core/rxjs-interop';
 
 export interface AddWidgetToDashboardDialogData {
   entityId: EntityId;
@@ -57,7 +58,7 @@ export class AddWidgetToDashboardDialogComponent extends
   DialogComponent<AddWidgetToDashboardDialogComponent, void>
   implements OnInit, ErrorStateMatcher {
 
-  addWidgetFormGroup: FormGroup;
+  addWidgetFormGroup: UntypedFormGroup;
 
   submitted = false;
 
@@ -66,7 +67,7 @@ export class AddWidgetToDashboardDialogComponent extends
               @Inject(MAT_DIALOG_DATA) public data: AddWidgetToDashboardDialogData,
               @SkipSelf() private errorStateMatcher: ErrorStateMatcher,
               public dialogRef: MatDialogRef<AddWidgetToDashboardDialogComponent, void>,
-              private fb: FormBuilder,
+              private fb: UntypedFormBuilder,
               private utils: UtilsService,
               private dashboardUtils: DashboardUtilsService,
               private dashboardService: DashboardService,
@@ -83,7 +84,9 @@ export class AddWidgetToDashboardDialogComponent extends
       }
     );
 
-    this.addWidgetFormGroup.get('addToDashboardType').valueChanges.subscribe(
+    this.addWidgetFormGroup.get('addToDashboardType').valueChanges.pipe(
+      takeUntilDestroyed()
+    ).subscribe(
       (addToDashboardType: number) => {
         if (addToDashboardType === 0) {
           this.addWidgetFormGroup.get('dashboardId').setValidators([Validators.required]);
@@ -107,7 +110,7 @@ export class AddWidgetToDashboardDialogComponent extends
   ngOnInit(): void {
   }
 
-  isErrorState(control: FormControl | null, form: FormGroupDirective | NgForm | null): boolean {
+  isErrorState(control: UntypedFormControl | null, form: FormGroupDirective | NgForm | null): boolean {
     const originalErrorState = this.errorStateMatcher.isErrorState(control, form);
     const customErrorState = !!(control && control.invalid && this.submitted);
     return originalErrorState || customErrorState;
@@ -126,9 +129,8 @@ export class AddWidgetToDashboardDialogComponent extends
         mergeMap((dashboard) => {
           dashboard = this.dashboardUtils.validateAndUpdateDashboard(dashboard);
           return this.selectTargetState(dashboard).pipe(
-            mergeMap((targetState) => {
-              return forkJoin([of(dashboard), of(targetState), this.selectTargetLayout(dashboard, targetState)]);
-            })
+            mergeMap((targetState) =>
+              forkJoin([of(dashboard), of(targetState), this.selectTargetLayout(dashboard, targetState)]))
           );
         })
       ).subscribe((res) => {
@@ -177,7 +179,7 @@ export class AddWidgetToDashboardDialogComponent extends
   private addWidgetToDashboard(dashboard: Dashboard, targetState: string, targetLayout: DashboardLayoutId) {
     const aliasesInfo: AliasesInfo = {
       datasourceAliases: {},
-      targetDeviceAliases: {}
+      targetDeviceAlias: null
     };
     aliasesInfo.datasourceAliases[0] = {
       alias: this.data.entityName,

@@ -1,5 +1,5 @@
 /**
- * Copyright © 2016-2021 The Thingsboard Authors
+ * Copyright © 2016-2025 The Thingsboard Authors
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -21,41 +21,60 @@ import com.google.common.util.concurrent.ListenableFuture;
 import com.google.common.util.concurrent.MoreExecutors;
 import com.google.protobuf.AbstractMessage;
 import lombok.Getter;
+import lombok.Setter;
 import lombok.extern.slf4j.Slf4j;
 import org.checkerframework.checker.nullness.qual.Nullable;
+import org.junit.Assert;
 import org.thingsboard.edge.rpc.EdgeGrpcClient;
 import org.thingsboard.edge.rpc.EdgeRpcClient;
-import org.thingsboard.server.common.data.id.UserId;
-import org.thingsboard.server.gen.edge.AlarmUpdateMsg;
-import org.thingsboard.server.gen.edge.AssetUpdateMsg;
-import org.thingsboard.server.gen.edge.CustomerUpdateMsg;
-import org.thingsboard.server.gen.edge.DashboardUpdateMsg;
-import org.thingsboard.server.gen.edge.DeviceCredentialsRequestMsg;
-import org.thingsboard.server.gen.edge.DeviceCredentialsUpdateMsg;
-import org.thingsboard.server.gen.edge.DeviceProfileUpdateMsg;
-import org.thingsboard.server.gen.edge.DeviceRpcCallMsg;
-import org.thingsboard.server.gen.edge.DeviceUpdateMsg;
-import org.thingsboard.server.gen.edge.DownlinkMsg;
-import org.thingsboard.server.gen.edge.DownlinkResponseMsg;
-import org.thingsboard.server.gen.edge.EdgeConfiguration;
-import org.thingsboard.server.gen.edge.EntityDataProto;
-import org.thingsboard.server.gen.edge.EntityViewUpdateMsg;
-import org.thingsboard.server.gen.edge.RelationUpdateMsg;
-import org.thingsboard.server.gen.edge.RuleChainMetadataUpdateMsg;
-import org.thingsboard.server.gen.edge.RuleChainUpdateMsg;
-import org.thingsboard.server.gen.edge.UplinkMsg;
-import org.thingsboard.server.gen.edge.UplinkResponseMsg;
-import org.thingsboard.server.gen.edge.UserCredentialsUpdateMsg;
-import org.thingsboard.server.gen.edge.UserUpdateMsg;
-import org.thingsboard.server.gen.edge.WidgetTypeUpdateMsg;
-import org.thingsboard.server.gen.edge.WidgetsBundleUpdateMsg;
+import org.thingsboard.server.controller.AbstractWebTest;
+import org.thingsboard.server.gen.edge.v1.AdminSettingsUpdateMsg;
+import org.thingsboard.server.gen.edge.v1.AiModelUpdateMsg;
+import org.thingsboard.server.gen.edge.v1.AlarmCommentUpdateMsg;
+import org.thingsboard.server.gen.edge.v1.AlarmUpdateMsg;
+import org.thingsboard.server.gen.edge.v1.AssetProfileUpdateMsg;
+import org.thingsboard.server.gen.edge.v1.AssetUpdateMsg;
+import org.thingsboard.server.gen.edge.v1.CalculatedFieldUpdateMsg;
+import org.thingsboard.server.gen.edge.v1.CustomerUpdateMsg;
+import org.thingsboard.server.gen.edge.v1.DashboardUpdateMsg;
+import org.thingsboard.server.gen.edge.v1.DeviceCredentialsRequestMsg;
+import org.thingsboard.server.gen.edge.v1.DeviceCredentialsUpdateMsg;
+import org.thingsboard.server.gen.edge.v1.DeviceProfileUpdateMsg;
+import org.thingsboard.server.gen.edge.v1.DeviceRpcCallMsg;
+import org.thingsboard.server.gen.edge.v1.DeviceUpdateMsg;
+import org.thingsboard.server.gen.edge.v1.DownlinkMsg;
+import org.thingsboard.server.gen.edge.v1.DownlinkResponseMsg;
+import org.thingsboard.server.gen.edge.v1.EdgeConfiguration;
+import org.thingsboard.server.gen.edge.v1.EntityDataProto;
+import org.thingsboard.server.gen.edge.v1.EntityViewUpdateMsg;
+import org.thingsboard.server.gen.edge.v1.NotificationRuleUpdateMsg;
+import org.thingsboard.server.gen.edge.v1.NotificationTargetUpdateMsg;
+import org.thingsboard.server.gen.edge.v1.NotificationTemplateUpdateMsg;
+import org.thingsboard.server.gen.edge.v1.OAuth2ClientUpdateMsg;
+import org.thingsboard.server.gen.edge.v1.OAuth2DomainUpdateMsg;
+import org.thingsboard.server.gen.edge.v1.OtaPackageUpdateMsg;
+import org.thingsboard.server.gen.edge.v1.QueueUpdateMsg;
+import org.thingsboard.server.gen.edge.v1.RelationUpdateMsg;
+import org.thingsboard.server.gen.edge.v1.ResourceUpdateMsg;
+import org.thingsboard.server.gen.edge.v1.RuleChainMetadataUpdateMsg;
+import org.thingsboard.server.gen.edge.v1.RuleChainUpdateMsg;
+import org.thingsboard.server.gen.edge.v1.TenantProfileUpdateMsg;
+import org.thingsboard.server.gen.edge.v1.TenantUpdateMsg;
+import org.thingsboard.server.gen.edge.v1.UplinkMsg;
+import org.thingsboard.server.gen.edge.v1.UplinkResponseMsg;
+import org.thingsboard.server.gen.edge.v1.UserCredentialsUpdateMsg;
+import org.thingsboard.server.gen.edge.v1.UserUpdateMsg;
+import org.thingsboard.server.gen.edge.v1.WidgetTypeUpdateMsg;
+import org.thingsboard.server.gen.edge.v1.WidgetsBundleUpdateMsg;
 
 import java.lang.reflect.Field;
 import java.util.ArrayList;
+import java.util.HashMap;
 import java.util.List;
+import java.util.Map;
 import java.util.Optional;
-import java.util.UUID;
 import java.util.concurrent.CountDownLatch;
+import java.util.concurrent.ThreadLocalRandom;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.locks.Lock;
 import java.util.concurrent.locks.ReentrantLock;
@@ -64,23 +83,31 @@ import java.util.stream.Collectors;
 @Slf4j
 public class EdgeImitator {
 
-    private String routingKey;
-    private String routingSecret;
+    private static final int MAX_DOWNLINK_FAILS = 2;
+    private final String routingKey;
+    private final String routingSecret;
 
-    private EdgeRpcClient edgeRpcClient;
+    private final EdgeRpcClient edgeRpcClient;
 
     private final Lock lock = new ReentrantLock();
 
     private CountDownLatch messagesLatch;
     private CountDownLatch responsesLatch;
-    private List<Class<? extends AbstractMessage>> ignoredTypes;
+    private final List<Class<? extends AbstractMessage>> ignoredTypes;
+
+    @Setter
+    private boolean randomFailuresOnTimeseriesDownlink = false;
+    @Setter
+    private double failureProbability = 0.0;
+    private final Map<Integer, Integer> downlinkFailureCountMap = new HashMap<>();
 
     @Getter
     private EdgeConfiguration configuration;
     @Getter
-    private UserId userId;
-    @Getter
     private final List<AbstractMessage> downlinkMsgs;
+
+    @Getter
+    private UplinkResponseMsg latestResponseMsg;
 
     public EdgeImitator(String host, int port, String routingKey, String routingSecret) throws NoSuchFieldException, IllegalAccessException {
         edgeRpcClient = new EdgeGrpcClient();
@@ -90,12 +117,15 @@ public class EdgeImitator {
         ignoredTypes = new ArrayList<>();
         this.routingKey = routingKey;
         this.routingSecret = routingSecret;
-        setEdgeCredentials("rpcHost", host);
-        setEdgeCredentials("rpcPort", port);
-        setEdgeCredentials("keepAliveTimeSec", 300);
+        updateEdgeClientFields("rpcHost", host);
+        updateEdgeClientFields("rpcPort", port);
+        updateEdgeClientFields("timeoutSecs", 3);
+        updateEdgeClientFields("keepAliveTimeSec", 300);
+        updateEdgeClientFields("keepAliveTimeoutSec", 5);
+        updateEdgeClientFields("maxInboundMessageSize", 4194304);
     }
 
-    private void setEdgeCredentials(String fieldName, Object value) throws NoSuchFieldException, IllegalAccessException {
+    private void updateEdgeClientFields(String fieldName, Object value) throws NoSuchFieldException, IllegalAccessException {
         Field fieldToSet = edgeRpcClient.getClass().getDeclaredField(fieldName);
         fieldToSet.setAccessible(true);
         fieldToSet.set(edgeRpcClient, value);
@@ -109,7 +139,7 @@ public class EdgeImitator {
                 this::onDownlink,
                 this::onClose);
 
-        edgeRpcClient.sendSyncRequestMsg();
+        edgeRpcClient.sendSyncRequestMsg(true);
     }
 
     public void disconnect() throws InterruptedException {
@@ -122,6 +152,7 @@ public class EdgeImitator {
 
     private void onUplinkResponse(UplinkResponseMsg msg) {
         log.info("onUplinkResponse: {}", msg);
+        latestResponseMsg = msg;
         responsesLatch.countDown();
     }
 
@@ -129,22 +160,22 @@ public class EdgeImitator {
         this.configuration = edgeConfiguration;
     }
 
-    private void onUserUpdate(UserUpdateMsg userUpdateMsg) {
-        this.userId = new UserId(new UUID(userUpdateMsg.getIdMSB(), userUpdateMsg.getIdLSB()));
-    }
-
     private void onDownlink(DownlinkMsg downlinkMsg) {
         ListenableFuture<List<Void>> future = processDownlinkMsg(downlinkMsg);
-        Futures.addCallback(future, new FutureCallback<List<Void>>() {
+        Futures.addCallback(future, new FutureCallback<>() {
             @Override
             public void onSuccess(@Nullable List<Void> result) {
-                DownlinkResponseMsg downlinkResponseMsg = DownlinkResponseMsg.newBuilder().setSuccess(true).build();
+                DownlinkResponseMsg downlinkResponseMsg = DownlinkResponseMsg.newBuilder()
+                        .setDownlinkMsgId(downlinkMsg.getDownlinkMsgId())
+                        .setSuccess(true).build();
                 edgeRpcClient.sendDownlinkResponseMsg(downlinkResponseMsg);
             }
 
             @Override
             public void onFailure(Throwable t) {
-                DownlinkResponseMsg downlinkResponseMsg = DownlinkResponseMsg.newBuilder().setSuccess(false).setErrorMsg(t.getMessage()).build();
+                DownlinkResponseMsg downlinkResponseMsg = DownlinkResponseMsg.newBuilder()
+                        .setDownlinkMsgId(downlinkMsg.getDownlinkMsgId())
+                        .setSuccess(false).setErrorMsg(t.getMessage()).build();
                 edgeRpcClient.sendDownlinkResponseMsg(downlinkResponseMsg);
             }
         }, MoreExecutors.directExecutor());
@@ -155,10 +186,11 @@ public class EdgeImitator {
     }
 
     private ListenableFuture<List<Void>> processDownlinkMsg(DownlinkMsg downlinkMsg) {
+        log.trace("processDownlinkMsg: {}", downlinkMsg);
         List<ListenableFuture<Void>> result = new ArrayList<>();
-        if (downlinkMsg.getDeviceUpdateMsgCount() > 0) {
-            for (DeviceUpdateMsg deviceUpdateMsg: downlinkMsg.getDeviceUpdateMsgList()) {
-                result.add(saveDownlinkMsg(deviceUpdateMsg));
+        if (downlinkMsg.getAdminSettingsUpdateMsgCount() > 0) {
+            for (AdminSettingsUpdateMsg adminSettingsUpdateMsg : downlinkMsg.getAdminSettingsUpdateMsgList()) {
+                result.add(saveDownlinkMsg(adminSettingsUpdateMsg));
             }
         }
         if (downlinkMsg.getDeviceProfileUpdateMsgCount() > 0) {
@@ -166,94 +198,197 @@ public class EdgeImitator {
                 result.add(saveDownlinkMsg(deviceProfileUpdateMsg));
             }
         }
+        if (downlinkMsg.getDeviceUpdateMsgCount() > 0) {
+            for (DeviceUpdateMsg deviceUpdateMsg : downlinkMsg.getDeviceUpdateMsgList()) {
+                result.add(saveDownlinkMsg(deviceUpdateMsg));
+            }
+        }
         if (downlinkMsg.getDeviceCredentialsUpdateMsgCount() > 0) {
-            for (DeviceCredentialsUpdateMsg deviceCredentialsUpdateMsg: downlinkMsg.getDeviceCredentialsUpdateMsgList()) {
+            for (DeviceCredentialsUpdateMsg deviceCredentialsUpdateMsg : downlinkMsg.getDeviceCredentialsUpdateMsgList()) {
                 result.add(saveDownlinkMsg(deviceCredentialsUpdateMsg));
             }
         }
+        if (downlinkMsg.getAssetProfileUpdateMsgCount() > 0) {
+            for (AssetProfileUpdateMsg assetProfileUpdateMsg : downlinkMsg.getAssetProfileUpdateMsgList()) {
+                result.add(saveDownlinkMsg(assetProfileUpdateMsg));
+            }
+        }
         if (downlinkMsg.getAssetUpdateMsgCount() > 0) {
-            for (AssetUpdateMsg assetUpdateMsg: downlinkMsg.getAssetUpdateMsgList()) {
+            for (AssetUpdateMsg assetUpdateMsg : downlinkMsg.getAssetUpdateMsgList()) {
                 result.add(saveDownlinkMsg(assetUpdateMsg));
             }
         }
         if (downlinkMsg.getRuleChainUpdateMsgCount() > 0) {
-            for (RuleChainUpdateMsg ruleChainUpdateMsg: downlinkMsg.getRuleChainUpdateMsgList()) {
+            for (RuleChainUpdateMsg ruleChainUpdateMsg : downlinkMsg.getRuleChainUpdateMsgList()) {
                 result.add(saveDownlinkMsg(ruleChainUpdateMsg));
             }
         }
         if (downlinkMsg.getRuleChainMetadataUpdateMsgCount() > 0) {
-            for (RuleChainMetadataUpdateMsg ruleChainMetadataUpdateMsg: downlinkMsg.getRuleChainMetadataUpdateMsgList()) {
+            for (RuleChainMetadataUpdateMsg ruleChainMetadataUpdateMsg : downlinkMsg.getRuleChainMetadataUpdateMsgList()) {
                 result.add(saveDownlinkMsg(ruleChainMetadataUpdateMsg));
             }
         }
         if (downlinkMsg.getDashboardUpdateMsgCount() > 0) {
-            for (DashboardUpdateMsg dashboardUpdateMsg: downlinkMsg.getDashboardUpdateMsgList()) {
+            for (DashboardUpdateMsg dashboardUpdateMsg : downlinkMsg.getDashboardUpdateMsgList()) {
                 result.add(saveDownlinkMsg(dashboardUpdateMsg));
             }
         }
         if (downlinkMsg.getRelationUpdateMsgCount() > 0) {
-            for (RelationUpdateMsg relationUpdateMsg: downlinkMsg.getRelationUpdateMsgList()) {
+            for (RelationUpdateMsg relationUpdateMsg : downlinkMsg.getRelationUpdateMsgList()) {
                 result.add(saveDownlinkMsg(relationUpdateMsg));
             }
         }
         if (downlinkMsg.getAlarmUpdateMsgCount() > 0) {
-            for (AlarmUpdateMsg alarmUpdateMsg: downlinkMsg.getAlarmUpdateMsgList()) {
+            for (AlarmUpdateMsg alarmUpdateMsg : downlinkMsg.getAlarmUpdateMsgList()) {
                 result.add(saveDownlinkMsg(alarmUpdateMsg));
             }
         }
+        if (downlinkMsg.getAlarmCommentUpdateMsgCount() > 0) {
+            for (AlarmCommentUpdateMsg alarmCommentUpdateMsg : downlinkMsg.getAlarmCommentUpdateMsgList()) {
+                result.add(saveDownlinkMsg(alarmCommentUpdateMsg));
+            }
+        }
         if (downlinkMsg.getEntityDataCount() > 0) {
-            for (EntityDataProto entityData: downlinkMsg.getEntityDataList()) {
-                result.add(saveDownlinkMsg(entityData));
+            for (EntityDataProto entityData : downlinkMsg.getEntityDataList()) {
+                if (randomFailuresOnTimeseriesDownlink) {
+                    int downlinkMsgId = downlinkMsg.getDownlinkMsgId();
+
+                    if (getRandomBoolean() && checkFailureThreshold(downlinkMsgId)) {
+                        result.add(Futures.immediateFailedFuture(new RuntimeException("Random failure. This is expected error for edge test")));
+                        downlinkFailureCountMap.put(downlinkMsgId, downlinkFailureCountMap.getOrDefault(downlinkMsgId, 0) + 1);
+                    } else {
+                        result.add(saveDownlinkMsg(entityData));
+                    }
+                } else {
+                    result.add(saveDownlinkMsg(entityData));
+                }
             }
         }
         if (downlinkMsg.getEntityViewUpdateMsgCount() > 0) {
-            for (EntityViewUpdateMsg entityViewUpdateMsg: downlinkMsg.getEntityViewUpdateMsgList()) {
+            for (EntityViewUpdateMsg entityViewUpdateMsg : downlinkMsg.getEntityViewUpdateMsgList()) {
                 result.add(saveDownlinkMsg(entityViewUpdateMsg));
             }
         }
         if (downlinkMsg.getCustomerUpdateMsgCount() > 0) {
-            for (CustomerUpdateMsg customerUpdateMsg: downlinkMsg.getCustomerUpdateMsgList()) {
+            for (CustomerUpdateMsg customerUpdateMsg : downlinkMsg.getCustomerUpdateMsgList()) {
                 result.add(saveDownlinkMsg(customerUpdateMsg));
             }
         }
         if (downlinkMsg.getWidgetsBundleUpdateMsgCount() > 0) {
-            for (WidgetsBundleUpdateMsg widgetsBundleUpdateMsg: downlinkMsg.getWidgetsBundleUpdateMsgList()) {
+            for (WidgetsBundleUpdateMsg widgetsBundleUpdateMsg : downlinkMsg.getWidgetsBundleUpdateMsgList()) {
                 result.add(saveDownlinkMsg(widgetsBundleUpdateMsg));
             }
         }
         if (downlinkMsg.getWidgetTypeUpdateMsgCount() > 0) {
-            for (WidgetTypeUpdateMsg widgetTypeUpdateMsg: downlinkMsg.getWidgetTypeUpdateMsgList()) {
+            for (WidgetTypeUpdateMsg widgetTypeUpdateMsg : downlinkMsg.getWidgetTypeUpdateMsgList()) {
                 result.add(saveDownlinkMsg(widgetTypeUpdateMsg));
             }
         }
         if (downlinkMsg.getUserUpdateMsgCount() > 0) {
-            for (UserUpdateMsg userUpdateMsg: downlinkMsg.getUserUpdateMsgList()) {
-                onUserUpdate(userUpdateMsg);
+            for (UserUpdateMsg userUpdateMsg : downlinkMsg.getUserUpdateMsgList()) {
                 result.add(saveDownlinkMsg(userUpdateMsg));
             }
         }
         if (downlinkMsg.getUserCredentialsUpdateMsgCount() > 0) {
-            for (UserCredentialsUpdateMsg userCredentialsUpdateMsg: downlinkMsg.getUserCredentialsUpdateMsgList()) {
+            for (UserCredentialsUpdateMsg userCredentialsUpdateMsg : downlinkMsg.getUserCredentialsUpdateMsgList()) {
                 result.add(saveDownlinkMsg(userCredentialsUpdateMsg));
             }
         }
         if (downlinkMsg.getDeviceRpcCallMsgCount() > 0) {
-            for (DeviceRpcCallMsg deviceRpcCallMsg: downlinkMsg.getDeviceRpcCallMsgList()) {
+            for (DeviceRpcCallMsg deviceRpcCallMsg : downlinkMsg.getDeviceRpcCallMsgList()) {
                 result.add(saveDownlinkMsg(deviceRpcCallMsg));
             }
         }
         if (downlinkMsg.getDeviceCredentialsRequestMsgCount() > 0) {
-            for (DeviceCredentialsRequestMsg deviceCredentialsRequestMsg: downlinkMsg.getDeviceCredentialsRequestMsgList()) {
+            for (DeviceCredentialsRequestMsg deviceCredentialsRequestMsg : downlinkMsg.getDeviceCredentialsRequestMsgList()) {
                 result.add(saveDownlinkMsg(deviceCredentialsRequestMsg));
             }
         }
+        if (downlinkMsg.getOtaPackageUpdateMsgCount() > 0) {
+            for (OtaPackageUpdateMsg otaPackageUpdateMsg : downlinkMsg.getOtaPackageUpdateMsgList()) {
+                result.add(saveDownlinkMsg(otaPackageUpdateMsg));
+            }
+        }
+        if (downlinkMsg.getQueueUpdateMsgCount() > 0) {
+            for (QueueUpdateMsg queueUpdateMsg : downlinkMsg.getQueueUpdateMsgList()) {
+                result.add(saveDownlinkMsg(queueUpdateMsg));
+            }
+        }
+        if (downlinkMsg.getTenantUpdateMsgCount() > 0) {
+            for (TenantUpdateMsg tenantUpdateMsg : downlinkMsg.getTenantUpdateMsgList()) {
+                result.add(saveDownlinkMsg(tenantUpdateMsg));
+            }
+        }
+        if (downlinkMsg.getTenantProfileUpdateMsgCount() > 0) {
+            for (TenantProfileUpdateMsg tenantProfileUpdateMsg : downlinkMsg.getTenantProfileUpdateMsgList()) {
+                result.add(saveDownlinkMsg(tenantProfileUpdateMsg));
+            }
+        }
+        if (downlinkMsg.getResourceUpdateMsgCount() > 0) {
+            for (ResourceUpdateMsg resourceUpdateMsg : downlinkMsg.getResourceUpdateMsgList()) {
+                result.add(saveDownlinkMsg(resourceUpdateMsg));
+            }
+        }
+        if (downlinkMsg.getOAuth2ClientUpdateMsgCount() > 0) {
+            for (OAuth2ClientUpdateMsg oAuth2ClientUpdateMsg : downlinkMsg.getOAuth2ClientUpdateMsgList()) {
+                result.add(saveDownlinkMsg(oAuth2ClientUpdateMsg));
+            }
+        }
+        if (downlinkMsg.getOAuth2DomainUpdateMsgCount() > 0) {
+            for (OAuth2DomainUpdateMsg oAuth2DomainUpdateMsg : downlinkMsg.getOAuth2DomainUpdateMsgList()) {
+                result.add(saveDownlinkMsg(oAuth2DomainUpdateMsg));
+            }
+        }
+        if (downlinkMsg.getNotificationTemplateUpdateMsgCount() > 0) {
+            for (NotificationTemplateUpdateMsg notificationTemplateUpdateMsg : downlinkMsg.getNotificationTemplateUpdateMsgList()) {
+                result.add(saveDownlinkMsg(notificationTemplateUpdateMsg));
+            }
+        }
+        if (downlinkMsg.getNotificationRuleUpdateMsgCount() > 0) {
+            for (NotificationRuleUpdateMsg notificationRuleUpdateMsg : downlinkMsg.getNotificationRuleUpdateMsgList()) {
+                result.add(saveDownlinkMsg(notificationRuleUpdateMsg));
+            }
+        }
+        if (downlinkMsg.getNotificationTargetUpdateMsgCount() > 0) {
+            for (NotificationTargetUpdateMsg notificationTargetUpdateMsg : downlinkMsg.getNotificationTargetUpdateMsgList()) {
+                result.add(saveDownlinkMsg(notificationTargetUpdateMsg));
+            }
+        }
+        if (downlinkMsg.getCalculatedFieldUpdateMsgCount() > 0) {
+            for (CalculatedFieldUpdateMsg calculatedFieldUpdateMsg : downlinkMsg.getCalculatedFieldUpdateMsgList()) {
+                result.add(saveDownlinkMsg(calculatedFieldUpdateMsg));
+            }
+        }
+        if (downlinkMsg.getAiModelUpdateMsgCount() > 0) {
+            for (AiModelUpdateMsg aiModelUpdateMsg : downlinkMsg.getAiModelUpdateMsgList()) {
+                result.add(saveDownlinkMsg(aiModelUpdateMsg));
+            }
+        }
+        if (downlinkMsg.hasEdgeConfiguration()) {
+            result.add(saveDownlinkMsg(downlinkMsg.getEdgeConfiguration()));
+        }
+        if (downlinkMsg.hasSyncCompletedMsg()) {
+            result.add(saveDownlinkMsg(downlinkMsg.getSyncCompletedMsg()));
+        }
+
         return Futures.allAsList(result);
+    }
+
+    private boolean checkFailureThreshold(int downlinkMsgId) {
+        return failureProbability == 100 ||
+                downlinkFailureCountMap.get(downlinkMsgId) == null ||
+                downlinkFailureCountMap.get(downlinkMsgId) < MAX_DOWNLINK_FAILS;
+    }
+
+    private boolean getRandomBoolean() {
+        double randomValue = ThreadLocalRandom.current().nextDouble() * 100;
+        return randomValue <= this.failureProbability;
     }
 
     private ListenableFuture<Void> saveDownlinkMsg(AbstractMessage message) {
         if (!ignoredTypes.contains(message.getClass())) {
+            lock.lock();
             try {
-                lock.lock();
                 downlinkMsgs.add(message);
             } finally {
                 lock.unlock();
@@ -264,19 +399,34 @@ public class EdgeImitator {
     }
 
     public boolean waitForMessages() throws InterruptedException {
-        return waitForMessages(5);
+        boolean success = waitForMessages(AbstractWebTest.TIMEOUT);
+
+        if (!success) {
+            List<AbstractMessage> downlinkMsgs = getDownlinkMsgs();
+            for (AbstractMessage downlinkMsg : downlinkMsgs) {
+                log.error("{}\n{}", downlinkMsg.getClass(), downlinkMsg);
+            }
+
+            log.error("message count: {}", downlinkMsgs.size());
+            Assert.fail("Await for messages was not successful!");
+        }
+
+        return true;
     }
 
-    public boolean waitForMessages(int timeout) throws InterruptedException {
-        return messagesLatch.await(timeout, TimeUnit.SECONDS);
+    public boolean waitForMessages(int timeoutInSeconds) throws InterruptedException {
+        return messagesLatch.await(timeoutInSeconds, TimeUnit.SECONDS);
     }
 
     public void expectMessageAmount(int messageAmount) {
+        // clear downlinks
+        downlinkMsgs.clear();
+
         messagesLatch = new CountDownLatch(messageAmount);
     }
 
     public boolean waitForResponses() throws InterruptedException {
-        return responsesLatch.await(5, TimeUnit.SECONDS);
+        return responsesLatch.await(AbstractWebTest.TIMEOUT, TimeUnit.SECONDS);
     }
 
     public void expectResponsesAmount(int messageAmount) {
@@ -286,8 +436,8 @@ public class EdgeImitator {
     @SuppressWarnings("unchecked")
     public <T extends AbstractMessage> Optional<T> findMessageByType(Class<T> tClass) {
         Optional<T> result;
+        lock.lock();
         try {
-            lock.lock();
             result = (Optional<T>) downlinkMsgs.stream().filter(downlinkMsg -> downlinkMsg.getClass().isAssignableFrom(tClass)).findAny();
         } finally {
             lock.unlock();
@@ -298,8 +448,8 @@ public class EdgeImitator {
     @SuppressWarnings("unchecked")
     public <T extends AbstractMessage> List<T> findAllMessagesByType(Class<T> tClass) {
         List<T> result;
+        lock.lock();
         try {
-            lock.lock();
             result = (List<T>) downlinkMsgs.stream().filter(downlinkMsg -> downlinkMsg.getClass().isAssignableFrom(tClass)).collect(Collectors.toList());
         } finally {
             lock.unlock();

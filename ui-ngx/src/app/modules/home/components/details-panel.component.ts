@@ -1,5 +1,5 @@
 ///
-/// Copyright © 2016-2021 The Thingsboard Authors
+/// Copyright © 2016-2025 The Thingsboard Authors
 ///
 /// Licensed under the Apache License, Version 2.0 (the "License");
 /// you may not use this file except in compliance with the License.
@@ -14,12 +14,21 @@
 /// limitations under the License.
 ///
 
-import { ChangeDetectorRef, Component, EventEmitter, Input, OnDestroy, Output } from '@angular/core';
+import {
+  ChangeDetectionStrategy,
+  ChangeDetectorRef,
+  Component,
+  EventEmitter,
+  Input,
+  OnDestroy,
+  Output
+} from '@angular/core';
 import { PageComponent } from '@shared/components/page.component';
 import { Store } from '@ngrx/store';
 import { AppState } from '@core/core.state';
-import { FormGroup } from '@angular/forms';
+import { UntypedFormGroup } from '@angular/forms';
 import { Subscription } from 'rxjs';
+import { coerceBoolean } from '@shared/decorators/coercion';
 
 @Component({
   selector: 'tb-details-panel',
@@ -36,11 +45,15 @@ export class DetailsPanelComponent extends PageComponent implements OnDestroy {
   @Input() isShowSearch = false;
   @Input() backgroundColor = '#FFF';
 
-  private theFormValue: FormGroup;
+  @Input()
+  @coerceBoolean()
+  showCloseDetails = true;
+
+  private theFormValue: UntypedFormGroup;
   private formSubscription: Subscription = null;
 
   @Input()
-  set theForm(value: FormGroup) {
+  set theForm(value: UntypedFormGroup) {
     if (this.theFormValue !== value) {
       if (this.formSubscription !== null) {
         this.formSubscription.unsubscribe();
@@ -53,7 +66,7 @@ export class DetailsPanelComponent extends PageComponent implements OnDestroy {
     }
   }
 
-  get theForm(): FormGroup {
+  get theForm(): UntypedFormGroup {
     return this.theFormValue;
   }
 

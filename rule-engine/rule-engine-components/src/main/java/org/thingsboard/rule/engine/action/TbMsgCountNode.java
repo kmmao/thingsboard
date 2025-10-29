@@ -1,5 +1,5 @@
 /**
- * Copyright © 2016-2021 The Thingsboard Authors
+ * Copyright © 2016-2025 The Thingsboard Authors
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -17,26 +17,22 @@ package org.thingsboard.rule.engine.action;
 
 import com.google.gson.Gson;
 import com.google.gson.JsonObject;
-import lombok.extern.slf4j.Slf4j;
 import org.thingsboard.rule.engine.api.RuleNode;
 import org.thingsboard.rule.engine.api.TbContext;
 import org.thingsboard.rule.engine.api.TbNode;
 import org.thingsboard.rule.engine.api.TbNodeConfiguration;
 import org.thingsboard.rule.engine.api.TbNodeException;
 import org.thingsboard.rule.engine.api.util.TbNodeUtils;
+import org.thingsboard.server.common.data.msg.TbMsgType;
+import org.thingsboard.server.common.data.msg.TbNodeConnectionType;
 import org.thingsboard.server.common.data.plugin.ComponentType;
 import org.thingsboard.server.common.msg.TbMsg;
 import org.thingsboard.server.common.msg.TbMsgMetaData;
-import org.thingsboard.server.common.msg.queue.ServiceQueue;
-import org.thingsboard.server.common.msg.session.SessionMsgType;
 
 import java.util.UUID;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicLong;
 
-import static org.thingsboard.rule.engine.api.TbRelationTypes.SUCCESS;
-
-@Slf4j
 @RuleNode(
         type = ComponentType.ACTION,
         name = "message count",
@@ -44,12 +40,10 @@ import static org.thingsboard.rule.engine.api.TbRelationTypes.SUCCESS;
         nodeDescription = "Count incoming messages",
         nodeDetails = "Count incoming messages for specified interval and produces POST_TELEMETRY_REQUEST msg with messages count",
         icon = "functions",
-        uiResources = {"static/rulenode/rulenode-core-config.js"},
-        configDirective = "tbActionNodeMsgCountConfig"
+        configDirective = "tbActionNodeMsgCountConfig",
+        docUrl = "https://thingsboard.io/docs/user-guide/rule-engine-2-0/nodes/action/message-count/"
 )
 public class TbMsgCountNode implements TbNode {
-
-    private static final String TB_MSG_COUNT_NODE_MSG = "TbMsgCountNodeMsg";
 
     private AtomicLong messagesProcessed = new AtomicLong(0);
     private final Gson gson = new Gson();
@@ -64,12 +58,11 @@ public class TbMsgCountNode implements TbNode {
         this.delay = TimeUnit.SECONDS.toMillis(config.getInterval());
         this.telemetryPrefix = config.getTelemetryPrefix();
         scheduleTickMsg(ctx, null);
-
     }
 
     @Override
     public void onMsg(TbContext ctx, TbMsg msg) {
-        if (msg.getType().equals(TB_MSG_COUNT_NODE_MSG) && msg.getId().equals(nextTickId)) {
+        if (msg.isTypeOf(TbMsgType.MSG_COUNT_SELF_MSG) && msg.getId().equals(nextTickId)) {
             JsonObject telemetryJson = new JsonObject();
             telemetryJson.addProperty(this.telemetryPrefix + "_" + ctx.getServiceId(), messagesProcessed.longValue());
 
@@ -78,8 +71,15 @@ public class TbMsgCountNode implements TbNode {
             TbMsgMetaData metaData = new TbMsgMetaData();
             metaData.putValue("delta", Long.toString(System.currentTimeMillis() - lastScheduledTs + delay));
 
-            TbMsg tbMsg = TbMsg.newMsg(msg.getQueueName(), SessionMsgType.POST_TELEMETRY_REQUEST.name(), ctx.getTenantId(), msg.getCustomerId(), metaData, gson.toJson(telemetryJson));
-            ctx.enqueueForTellNext(tbMsg, SUCCESS);
+            TbMsg tbMsg = TbMsg.newMsg()
+                    .queueName(msg.getQueueName())
+                    .type(TbMsgType.POST_TELEMETRY_REQUEST)
+                    .originator(ctx.getTenantId())
+                    .customerId(msg.getCustomerId())
+                    .copyMetaData(metaData)
+                    .data(gson.toJson(telemetryJson))
+                    .build();
+            ctx.enqueueForTellNext(tbMsg, TbNodeConnectionType.SUCCESS);
             scheduleTickMsg(ctx, tbMsg);
         } else {
             messagesProcessed.incrementAndGet();
@@ -94,12 +94,9 @@ public class TbMsgCountNode implements TbNode {
         }
         lastScheduledTs = lastScheduledTs + delay;
         long curDelay = Math.max(0L, (lastScheduledTs - curTs));
-        TbMsg tickMsg = ctx.newMsg(ServiceQueue.MAIN, TB_MSG_COUNT_NODE_MSG, ctx.getSelfId(), msg != null ? msg.getCustomerId() : null, new TbMsgMetaData(), "");
+        TbMsg tickMsg = ctx.newMsg(null, TbMsgType.MSG_COUNT_SELF_MSG, ctx.getSelfId(), msg != null ? msg.getCustomerId() : null, TbMsgMetaData.EMPTY, TbMsg.EMPTY_STRING);
         nextTickId = tickMsg.getId();
         ctx.tellSelf(tickMsg, curDelay);
     }
 
-    @Override
-    public void destroy() {
-    }
 }

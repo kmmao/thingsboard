@@ -1,5 +1,5 @@
 /**
- * Copyright © 2016-2021 The Thingsboard Authors
+ * Copyright © 2016-2025 The Thingsboard Authors
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -16,13 +16,11 @@
 package org.thingsboard.server.service.install.update;
 
 import lombok.extern.slf4j.Slf4j;
-import org.thingsboard.server.common.data.SearchTextBased;
-import org.thingsboard.server.common.data.id.UUIDBased;
 import org.thingsboard.server.common.data.page.PageData;
 import org.thingsboard.server.common.data.page.PageLink;
 
 @Slf4j
-public abstract class PaginatedUpdater<I, D extends SearchTextBased<? extends UUIDBased>> {
+public abstract class PaginatedUpdater<I, D> {
 
     private static final int DEFAULT_LIMIT = 100;
     private int updated = 0;
@@ -47,6 +45,10 @@ public abstract class PaginatedUpdater<I, D extends SearchTextBased<? extends UU
                 }
             }
         }
+    }
+
+    public void updateEntities() {
+        updateEntities(null);
     }
 
     protected boolean forceReportTotal() {

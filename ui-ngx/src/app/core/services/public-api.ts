@@ -1,5 +1,5 @@
 ///
-/// Copyright © 2016-2021 The Thingsboard Authors
+/// Copyright © 2016-2025 The Thingsboard Authors
 ///
 /// Licensed under the Apache License, Version 2.0 (the "License");
 /// you may not use this file except in compliance with the License.
@@ -23,10 +23,11 @@ export * from './dynamic-component-factory.service';
 export * from './item-buffer.service';
 export * from './menu.models';
 export * from './menu.service';
-export * from './notification.service';
+export * from './toast-notification.service';
 export * from './raf.service';
 export * from './resources.service';
 export * from './time.service';
 export * from './title.service';
+export * from './unit.service';
 export * from './utils.service';
 export * from './window.service';

@@ -1,5 +1,5 @@
 ///
-/// Copyright © 2016-2021 The Thingsboard Authors
+/// Copyright © 2016-2025 The Thingsboard Authors
 ///
 /// Licensed under the Apache License, Version 2.0 (the "License");
 /// you may not use this file except in compliance with the License.
@@ -22,20 +22,21 @@ import {
   FormGroup,
   NG_VALIDATORS,
   NG_VALUE_ACCESSOR,
-  ValidationErrors,
   Validator,
-  ValidatorFn,
   Validators
 } from '@angular/forms';
 import {
   credentialTypeNames,
-  DeviceCredentialMQTTBasic,
+  credentialTypesByTransportType,
   DeviceCredentials,
-  DeviceCredentialsType
+  DeviceCredentialsType,
+  DeviceTransportType
 } from '@shared/models/device.models';
 import { Subject } from 'rxjs';
 import { takeUntil } from 'rxjs/operators';
-import { isDefinedAndNotNull } from '@core/utils';
+import { generateSecret, isDefinedAndNotNull } from '@core/utils';
+import { coerceBoolean } from '@shared/decorators/coercion';
+import { DeviceId } from "@shared/models/id/device-id";
 
 @Component({
   selector: 'tb-device-credentials',
@@ -51,39 +52,54 @@ import { isDefinedAndNotNull } from '@core/utils';
       useExisting: forwardRef(() => DeviceCredentialsComponent),
       multi: true,
     }],
-  styleUrls: []
+  styleUrls: ['./device-credentials.component.scss']
 })
 export class DeviceCredentialsComponent implements ControlValueAccessor, OnInit, Validator, OnDestroy {
 
   @Input()
   disabled: boolean;
 
-  private destroy$ = new Subject();
+  private deviceTransportTypeValue = DeviceTransportType.DEFAULT;
+  get deviceTransportType(): DeviceTransportType {
+    return this.deviceTransportTypeValue;
+  }
+  @Input()
+  set deviceTransportType(type: DeviceTransportType) {
+    if (type) {
+      this.deviceTransportTypeValue = type;
+      this.credentialsTypes = credentialTypesByTransportType.get(type);
+      const currentType = this.deviceCredentialsFormGroup.get('credentialsType').value;
+      if (!this.credentialsTypes.includes(currentType)) {
+        this.deviceCredentialsFormGroup.get('credentialsType').patchValue(this.credentialsTypes[0], {onlySelf: true});
+      }
+    }
+  }
+
+  @Input()
+  @coerceBoolean()
+  initAccessToken = false;
+
+  private destroy$ = new Subject<void>();
 
   deviceCredentialsFormGroup: FormGroup;
 
   deviceCredentialsType = DeviceCredentialsType;
 
-  credentialsTypes = Object.values(DeviceCredentialsType);
+  credentialsTypes = credentialTypesByTransportType.get(DeviceTransportType.DEFAULT);
 
   credentialTypeNamesMap = credentialTypeNames;
 
-  hidePassword = true;
+  deviceId: DeviceId;
 
-  private propagateChange = (v: any) => {};
+  private propagateChange = null;
+  private propagateChangePending = false;
 
   constructor(public fb: FormBuilder) {
     this.deviceCredentialsFormGroup = this.fb.group({
       credentialsType: [DeviceCredentialsType.ACCESS_TOKEN],
       credentialsId: [null],
-      credentialsValue: [null],
-      credentialsBasic: this.fb.group({
-        clientId: [null, [Validators.pattern(/^[A-Za-z0-9]+$/)]],
-        userName: [null],
-        password: [null]
-      }, {validators: this.atLeastOne(Validators.required, ['clientId', 'userName'])})
+      credentialsValue: [null]
     });
-    this.deviceCredentialsFormGroup.get('credentialsBasic').disable();
     this.deviceCredentialsFormGroup.valueChanges.pipe(
       takeUntil(this.destroy$)
     ).subscribe(() => {
@@ -91,14 +107,18 @@ export class DeviceCredentialsComponent implements ControlValueAccessor, OnInit,
     });
     this.deviceCredentialsFormGroup.get('credentialsType').valueChanges.pipe(
       takeUntil(this.destroy$)
-    ).subscribe(() => {
-      this.credentialsTypeChanged();
+    ).subscribe((value) => {
+      this.credentialsTypeChanged(value);
     });
   }
 
   ngOnInit(): void {
     if (this.disabled) {
       this.deviceCredentialsFormGroup.disable({emitEvent: false});
+    }
+    if (this.initAccessToken && !this.deviceCredentialsFormGroup.get('credentialsId').value &&
+      this.deviceCredentialsFormGroup.get('credentialsType').value === DeviceCredentialsType.ACCESS_TOKEN) {
+      this.deviceCredentialsFormGroup.get('credentialsId').patchValue(generateSecret(20));
     }
   }
 
@@ -109,18 +129,12 @@ export class DeviceCredentialsComponent implements ControlValueAccessor, OnInit,
 
   writeValue(value: DeviceCredentials | null): void {
     if (isDefinedAndNotNull(value)) {
-      let credentialsBasic = {clientId: null, userName: null, password: null};
-      let credentialsValue = null;
-      if (value.credentialsType === DeviceCredentialsType.MQTT_BASIC) {
-        credentialsBasic = JSON.parse(value.credentialsValue) as DeviceCredentialMQTTBasic;
-      } else {
-        credentialsValue = value.credentialsValue;
-      }
+      this.deviceId = value.deviceId;
+      const credentialsType = this.credentialsTypes.includes(value.credentialsType) ? value.credentialsType : this.credentialsTypes[0];
       this.deviceCredentialsFormGroup.patchValue({
-        credentialsType: value.credentialsType,
+        credentialsType,
         credentialsId: value.credentialsId,
-        credentialsValue,
-        credentialsBasic
+        credentialsValue: value.credentialsValue
       }, {emitEvent: false});
       this.updateValidators();
     }
@@ -128,15 +142,21 @@ export class DeviceCredentialsComponent implements ControlValueAccessor, OnInit,
 
   updateView() {
     const deviceCredentialsValue = this.deviceCredentialsFormGroup.value;
-    if (deviceCredentialsValue.credentialsType === DeviceCredentialsType.MQTT_BASIC) {
-      deviceCredentialsValue.credentialsValue = JSON.stringify(deviceCredentialsValue.credentialsBasic);
+    if (this.propagateChange) {
+      this.propagateChange(deviceCredentialsValue);
+    } else {
+      this.propagateChangePending = true;
     }
-    delete deviceCredentialsValue.credentialsBasic;
-    this.propagateChange(deviceCredentialsValue);
   }
 
   registerOnChange(fn: any): void {
     this.propagateChange = fn;
+    if (this.propagateChangePending) {
+      this.propagateChangePending = false;
+      setTimeout(() => {
+        this.updateView();
+      }, 0);
+    }
   }
 
   registerOnTouched(fn: any): void {}
@@ -148,7 +168,6 @@ export class DeviceCredentialsComponent implements ControlValueAccessor, OnInit,
     } else {
       this.deviceCredentialsFormGroup.enable({emitEvent: false});
       this.updateValidators();
-      this.deviceCredentialsFormGroup.updateValueAndValidity();
     }
   }
 
@@ -160,66 +179,36 @@ export class DeviceCredentialsComponent implements ControlValueAccessor, OnInit,
     };
   }
 
-  credentialsTypeChanged(): void {
+  credentialsTypeChanged(type: DeviceCredentialsType): void {
     this.deviceCredentialsFormGroup.patchValue({
       credentialsId: null,
-      credentialsValue: null,
-      credentialsBasic: {clientId: '', userName: '', password: ''}
+      credentialsValue: null
     });
     this.updateValidators();
+    if (type === DeviceCredentialsType.ACCESS_TOKEN && this.initAccessToken) {
+      this.deviceCredentialsFormGroup.get('credentialsId').patchValue(generateSecret(20));
+    }
   }
 
   updateValidators(): void {
-    this.hidePassword = true;
     const credentialsType = this.deviceCredentialsFormGroup.get('credentialsType').value as DeviceCredentialsType;
     switch (credentialsType) {
       case DeviceCredentialsType.ACCESS_TOKEN:
-        this.deviceCredentialsFormGroup.get('credentialsId').setValidators([Validators.required, Validators.pattern(/^.{1,20}$/)]);
+        this.deviceCredentialsFormGroup.get('credentialsId').setValidators([Validators.required, Validators.pattern(/^.{1,32}$/)]);
         this.deviceCredentialsFormGroup.get('credentialsId').updateValueAndValidity({emitEvent: false});
         this.deviceCredentialsFormGroup.get('credentialsValue').setValidators([]);
         this.deviceCredentialsFormGroup.get('credentialsValue').updateValueAndValidity({emitEvent: false});
-        this.deviceCredentialsFormGroup.get('credentialsBasic').disable({emitEvent: false});
         break;
-      case DeviceCredentialsType.X509_CERTIFICATE:
-      case DeviceCredentialsType.LWM2M_CREDENTIALS:
+      default:
         this.deviceCredentialsFormGroup.get('credentialsValue').setValidators([Validators.required]);
         this.deviceCredentialsFormGroup.get('credentialsValue').updateValueAndValidity({emitEvent: false});
         this.deviceCredentialsFormGroup.get('credentialsId').setValidators([]);
         this.deviceCredentialsFormGroup.get('credentialsId').updateValueAndValidity({emitEvent: false});
-        this.deviceCredentialsFormGroup.get('credentialsBasic').disable({emitEvent: false});
-        break;
-      case DeviceCredentialsType.MQTT_BASIC:
-        this.deviceCredentialsFormGroup.get('credentialsBasic').enable({emitEvent: false});
-        this.deviceCredentialsFormGroup.get('credentialsBasic').updateValueAndValidity({emitEvent: false});
-        this.deviceCredentialsFormGroup.get('credentialsId').setValidators([]);
-        this.deviceCredentialsFormGroup.get('credentialsId').updateValueAndValidity({emitEvent: false});
-        this.deviceCredentialsFormGroup.get('credentialsValue').setValidators([]);
-        this.deviceCredentialsFormGroup.get('credentialsValue').updateValueAndValidity({emitEvent: false});
         break;
     }
   }
 
-  private atLeastOne(validator: ValidatorFn, controls: string[] = null) {
-    return (group: FormGroup): ValidationErrors | null => {
-      if (!controls) {
-        controls = Object.keys(group.controls);
-      }
-      const hasAtLeastOne = group?.controls && controls.some(k => !validator(group.controls[k]));
-
-      return hasAtLeastOne ? null : {atLeastOne: true};
-    };
-  }
-
-  passwordChanged() {
-    const value = this.deviceCredentialsFormGroup.get('credentialsBasic.password').value;
-    if (value !== '') {
-      this.deviceCredentialsFormGroup.get('credentialsBasic.userName').setValidators([Validators.required]);
-    } else {
-      this.deviceCredentialsFormGroup.get('credentialsBasic.userName').setValidators([]);
-    }
-    this.deviceCredentialsFormGroup.get('credentialsBasic.userName').updateValueAndValidity({
-      emitEvent: false,
-      onlySelf: true
-    });
+  public generate(formControlName: string) {
+    this.deviceCredentialsFormGroup.get(formControlName).patchValue(generateSecret(20));
   }
 }

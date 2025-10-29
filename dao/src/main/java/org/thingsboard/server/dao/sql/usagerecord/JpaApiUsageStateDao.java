@@ -1,5 +1,5 @@
 /**
- * Copyright © 2016-2021 The Thingsboard Authors
+ * Copyright © 2016-2025 The Thingsboard Authors
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -15,22 +15,30 @@
  */
 package org.thingsboard.server.dao.sql.usagerecord;
 
-import org.springframework.data.repository.CrudRepository;
+import org.springframework.data.domain.Limit;
+import org.springframework.data.jpa.repository.JpaRepository;
 import org.springframework.stereotype.Component;
 import org.thingsboard.server.common.data.ApiUsageState;
+import org.thingsboard.server.common.data.EntityType;
+import org.thingsboard.server.common.data.edqs.fields.ApiUsageStateFields;
 import org.thingsboard.server.common.data.id.EntityId;
 import org.thingsboard.server.common.data.id.TenantId;
+import org.thingsboard.server.common.data.page.PageData;
+import org.thingsboard.server.common.data.page.PageLink;
 import org.thingsboard.server.dao.DaoUtil;
 import org.thingsboard.server.dao.model.sql.ApiUsageStateEntity;
 import org.thingsboard.server.dao.sql.JpaAbstractDao;
 import org.thingsboard.server.dao.usagerecord.ApiUsageStateDao;
+import org.thingsboard.server.dao.util.SqlDao;
 
+import java.util.List;
 import java.util.UUID;
 
 /**
  * @author Andrii Shvaika
  */
 @Component
+@SqlDao
 public class JpaApiUsageStateDao extends JpaAbstractDao<ApiUsageStateEntity, ApiUsageState> implements ApiUsageStateDao {
 
     private final ApiUsageStateRepository apiUsageStateRepository;
@@ -45,7 +53,7 @@ public class JpaApiUsageStateDao extends JpaAbstractDao<ApiUsageStateEntity, Api
     }
 
     @Override
-    protected CrudRepository<ApiUsageStateEntity, UUID> getCrudRepository() {
+    protected JpaRepository<ApiUsageStateEntity, UUID> getRepository() {
         return apiUsageStateRepository;
     }
 
@@ -68,4 +76,20 @@ public class JpaApiUsageStateDao extends JpaAbstractDao<ApiUsageStateEntity, Api
     public void deleteApiUsageStateByEntityId(EntityId entityId) {
         apiUsageStateRepository.deleteByEntityIdAndEntityType(entityId.getId(), entityId.getEntityType().name());
     }
+
+    @Override
+    public PageData<ApiUsageState> findAllByTenantId(TenantId tenantId, PageLink pageLink) {
+        return DaoUtil.toPageData(apiUsageStateRepository.findAllByTenantId(tenantId.getId(), DaoUtil.toPageable(pageLink)));
+    }
+
+    @Override
+    public List<ApiUsageStateFields> findNextBatch(UUID id, int batchSize) {
+        return apiUsageStateRepository.findNextBatch(id, Limit.of(batchSize));
+    }
+
+    @Override
+    public EntityType getEntityType() {
+        return EntityType.API_USAGE_STATE;
+    }
+
 }

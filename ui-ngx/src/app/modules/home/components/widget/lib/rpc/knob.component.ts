@@ -1,5 +1,5 @@
 ///
-/// Copyright © 2016-2021 The Thingsboard Authors
+/// Copyright © 2016-2025 The Thingsboard Authors
 ///
 /// Licensed under the Apache License, Version 2.0 (the "License");
 /// you may not use this file except in compliance with the License.
@@ -14,36 +14,27 @@
 /// limitations under the License.
 ///
 
-import { Component, ElementRef, Input, OnDestroy, OnInit, ViewChild } from '@angular/core';
-import { PageComponent } from '@shared/components/page.component';
+import { ChangeDetectorRef, Component, ElementRef, Input, OnDestroy, OnInit, ViewChild } from '@angular/core';
 import { WidgetContext } from '@home/models/widget-component.models';
-import { UtilsService } from '@core/services/utils.service';
-import { Store } from '@ngrx/store';
-import { AppState } from '@core/core.state';
-import { isDefined, isNumber } from '@core/utils';
+import { deepClone, isDefined } from '@core/utils';
 import { CanvasDigitalGaugeOptions } from '@home/components/widget/lib/canvas-digital-gauge';
-import * as tinycolor_ from 'tinycolor2';
-import { ResizeObserver } from '@juggle/resize-observer';
+import tinycolor from 'tinycolor2';
+import { ColorProcessor, gradientColor, ValueFormatProcessor } from '@shared/models/widget-settings.models';
+import {
+  KnobSettings,
+  knobWidgetDefaultSettings,
+  prepareKnobSettings
+} from '@shared/models/widget/rpc/knob.component.models';
+import { ValueType } from '@shared/models/constants';
+import { BasicActionWidgetComponent, ValueSetter } from '@home/components/widget/lib/action/action-widget.models';
 import GenericOptions = CanvasGauges.GenericOptions;
-
-const tinycolor = tinycolor_;
-
-interface KnobSettings {
-  minValue: number;
-  maxValue: number;
-  initialValue: number;
-  title: string;
-  getValueMethod: string;
-  setValueMethod: string;
-  requestTimeout: number;
-}
 
 @Component({
   selector: 'tb-knob',
   templateUrl: './knob.component.html',
   styleUrls: ['./knob.component.scss']
 })
-export class KnobComponent extends PageComponent implements OnInit, OnDestroy {
+export class KnobComponent extends BasicActionWidgetComponent implements OnInit, OnDestroy {
 
   @ViewChild('knob', {static: true}) knobRef: ElementRef<HTMLElement>;
   @ViewChild('knobContainer', {static: true}) knobContainerRef: ElementRef<HTMLElement>;
@@ -51,8 +42,6 @@ export class KnobComponent extends PageComponent implements OnInit, OnDestroy {
   @ViewChild('knobTopPointer', {static: true}) knobTopPointerRef: ElementRef<HTMLElement>;
   @ViewChild('knobValueContainer', {static: true}) knobValueContainerRef: ElementRef<HTMLElement>;
   @ViewChild('knobValue', {static: true}) knobValueRef: ElementRef<HTMLElement>;
-  @ViewChild('knobErrorContainer', {static: true}) knobErrorContainerRef: ElementRef<HTMLElement>;
-  @ViewChild('knobError', {static: true}) knobErrorRef: ElementRef<HTMLElement>;
   @ViewChild('knobTitleContainer', {static: true}) knobTitleContainerRef: ElementRef<HTMLElement>;
   @ViewChild('knobTitle', {static: true}) knobTitleRef: ElementRef<HTMLElement>;
   @ViewChild('knobMinmaxContainer', {static: true}) knobMinmaxContainerRef: ElementRef<HTMLElement>;
@@ -63,12 +52,12 @@ export class KnobComponent extends PageComponent implements OnInit, OnDestroy {
   ctx: WidgetContext;
 
   value = '0';
-  error = '';
   title = '';
   minValue: number;
   maxValue: number;
   newValue = 0;
 
+  private decimals: number;
   private startDeg = -1;
   private currentDeg = 0;
   private rotation = 0;
@@ -77,11 +66,6 @@ export class KnobComponent extends PageComponent implements OnInit, OnDestroy {
 
   private minDeg = -45;
   private maxDeg = 225;
-
-  private isSimulated: boolean;
-  private requestTimeout: number;
-  private getValueMethod: string;
-  private setValueMethod: string;
 
   private executingUpdateValue: boolean;
   private scheduledValue: number;
@@ -95,8 +79,6 @@ export class KnobComponent extends PageComponent implements OnInit, OnDestroy {
   private knobValue: JQuery<HTMLElement>;
   private knobTitleContainer: JQuery<HTMLElement>;
   private knobTitle: JQuery<HTMLElement>;
-  private knobErrorContainer: JQuery<HTMLElement>;
-  private knobError: JQuery<HTMLElement>;
   private knobMinmaxContainer: JQuery<HTMLElement>;
   private minmaxLabel: JQuery<HTMLElement>;
   private textMeasure: JQuery<HTMLElement>;
@@ -106,9 +88,11 @@ export class KnobComponent extends PageComponent implements OnInit, OnDestroy {
 
   private knobResize$: ResizeObserver;
 
-  constructor(private utils: UtilsService,
-              protected store: Store<AppState>) {
-    super(store);
+  private valueSetter: ValueSetter<number>;
+  private valueFormat: ValueFormatProcessor;
+
+  constructor(protected cd: ChangeDetectorRef) {
+    super(cd);
   }
 
   ngOnInit(): void {
@@ -120,8 +104,6 @@ export class KnobComponent extends PageComponent implements OnInit, OnDestroy {
     this.knobValue = $(this.knobValueRef.nativeElement);
     this.knobTitleContainer = $(this.knobTitleContainerRef.nativeElement);
     this.knobTitle = $(this.knobTitleRef.nativeElement);
-    this.knobErrorContainer = $(this.knobErrorContainerRef.nativeElement);
-    this.knobError = $(this.knobErrorRef.nativeElement);
     this.knobMinmaxContainer = $(this.knobMinmaxContainerRef.nativeElement);
     this.minmaxLabel = this.knobMinmaxContainer.find<HTMLElement>('.minmax-label');
     this.textMeasure = $(this.textMeasureRef.nativeElement);
@@ -138,10 +120,36 @@ export class KnobComponent extends PageComponent implements OnInit, OnDestroy {
     if (this.knobResize$) {
       this.knobResize$.disconnect();
     }
+    this.ctx.controlApi.completedCommand();
   }
 
   private init() {
-    const settings: KnobSettings = this.ctx.settings;
+    const settings: KnobSettings = prepareKnobSettings({...deepClone(knobWidgetDefaultSettings), ...this.ctx.settings});
+
+    let initialValue = isDefined(settings.initialValue) ? settings.initialValue : this.minValue;
+
+    const getInitialStateSettings =
+      {...settings.initialState, actionLabel: this.ctx.translate.instant('widgets.slider.initial-value')};
+    this.createValueGetter(getInitialStateSettings, ValueType.DOUBLE, {
+      next: (value) => {
+        if (this.canvasBar) {
+          this.setValue(value);
+        } else {
+          initialValue = value;
+        }
+      }
+    });
+
+    const valueChangeSettings = {...settings.valueChange,
+      actionLabel: this.ctx.translate.instant('widgets.slider.on-value-change')};
+    this.valueSetter = this.createValueSetter(valueChangeSettings);
+
+    this.decimals = isDefined(this.ctx.decimals) ? this.ctx.decimals : 0;
+    this.valueFormat = ValueFormatProcessor.fromSettings(this.ctx.$injector, {
+      units: this.ctx.units,
+      decimals: this.decimals,
+      showZeroDecimals: true
+    });
 
     this.minValue = isDefined(settings.minValue) ? settings.minValue : 0;
     this.maxValue = isDefined(settings.maxValue) ? settings.maxValue : 100;
@@ -155,16 +163,16 @@ export class KnobComponent extends PageComponent implements OnInit, OnDestroy {
       neonGlowBrightness: 0,
       gaugeWidthScale: 0.4,
       gaugeColor: 'rgba(0, 0, 0, 0)',
-      levelColors,
       minValue: this.minValue,
       maxValue: this.maxValue,
       gaugeType: 'donut',
       dashThickness: 2,
-      donutStartAngle: 3/4*Math.PI,
-      donutEndAngle: 9/4*Math.PI,
-      animation: false
+      donutStartAngle: 3 / 4 * Math.PI,
+      donutEndAngle: 9 / 4 * Math.PI,
+      animation: false,
+      barColorProcessor: ColorProcessor.fromSettings(gradientColor('rgba(0, 0, 0, 0)', levelColors, this.minValue, this.maxValue), this.ctx),
+      valueFormat: null
     };
-
 
     this.knob.on('click', (e) => {
       if (this.moving) {
@@ -209,10 +217,10 @@ export class KnobComponent extends PageComponent implements OnInit, OnDestroy {
       e.preventDefault();
       const offset = this.knob.offset();
       const center = {
-        y : offset.top + this.knob.height()/2,
-        x: offset.left + this.knob.width()/2
+        y: offset.top + this.knob.height() / 2,
+        x: offset.left + this.knob.width() / 2
       };
-      const rad2deg = 180/Math.PI;
+      const rad2deg = 180 / Math.PI;
 
       $(document).on('mousemove.rem touchmove.rem', (ev) => {
         this.moving = true;
@@ -220,21 +228,20 @@ export class KnobComponent extends PageComponent implements OnInit, OnDestroy {
 
         const a = center.y - t.pageY;
         const b = center.x - t.pageX;
-        let deg = Math.atan2(a,b)*rad2deg;
-        if(deg < 0){
+        let deg = Math.atan2(a, b) * rad2deg;
+        if (deg < 0) {
           deg = 360 + deg;
         }
 
-        if(this.startDeg === -1){
+        if (this.startDeg === -1) {
           this.startDeg = deg;
         }
 
-        let tmp = Math.floor((deg-this.startDeg) + this.rotation);
+        let tmp = Math.floor((deg - this.startDeg) + this.rotation);
 
-        if(tmp < 0){
+        if (tmp < 0) {
           tmp = 360 + tmp;
-        }
-        else if(tmp > 359){
+        } else if (tmp > 359) {
           tmp = tmp % 360;
         }
 
@@ -251,7 +258,7 @@ export class KnobComponent extends PageComponent implements OnInit, OnDestroy {
             }
           }
         }
-        if(Math.abs(tmp - this.lastDeg) > 180){
+        if (Math.abs(tmp - this.lastDeg) > 180) {
           this.startDeg = deg;
           this.rotation = this.currentDeg;
           return false;
@@ -260,12 +267,12 @@ export class KnobComponent extends PageComponent implements OnInit, OnDestroy {
         this.currentDeg = tmp;
         this.lastDeg = tmp;
 
-        this.knobTopPointerContainer.css('transform','rotate('+(this.currentDeg)+'deg)');
+        this.knobTopPointerContainer.css('transform', 'rotate(' + (this.currentDeg) + 'deg)');
         this.turn(this.degreeToRatio(this.currentDeg));
       });
 
-      $(document).on('mouseup.rem  touchend.rem',() => {
-        if(this.newValue !== this.rpcValue && this.moving) {
+      $(document).on('mouseup.rem  touchend.rem', () => {
+        if (this.newValue !== this.rpcValue && this.moving) {
           this.rpcUpdateValue(this.newValue);
         }
         this.knob.off('.rem');
@@ -276,51 +283,25 @@ export class KnobComponent extends PageComponent implements OnInit, OnDestroy {
 
     });
 
-    const subscription = this.ctx.defaultSubscription;
-    const rpcEnabled = subscription.rpcEnabled;
-
-    this.isSimulated = this.utils.widgetEditMode;
-
-    this.requestTimeout = 500;
-    if (settings.requestTimeout) {
-      this.requestTimeout = settings.requestTimeout;
-    }
-    this.getValueMethod = 'getValue';
-    if (settings.getValueMethod && settings.getValueMethod.length) {
-      this.getValueMethod = settings.getValueMethod;
-    }
-    this.setValueMethod = 'setValue';
-    if (settings.setValueMethod && settings.setValueMethod.length) {
-      this.setValueMethod = settings.setValueMethod;
-    }
-
     import('@home/components/widget/lib/canvas-digital-gauge').then(
       (gauge) => {
         this.canvasBar = new gauge.CanvasDigitalGauge(canvasBarData).draw();
-        const initialValue = isDefined(settings.initialValue) ? settings.initialValue : this.minValue;
         this.setValue(initialValue);
-        if (!rpcEnabled) {
-          this.onError('Target device is not set!');
-        } else {
-          if (!this.isSimulated) {
-            this.rpcRequestValue();
-          }
-        }
       }
     );
 
   }
 
   private degreeToRatio(degree: number): number {
-    return (degree-this.minDeg)/(this.maxDeg-this.minDeg);
+    return (degree - this.minDeg) / (this.maxDeg - this.minDeg);
   }
 
   private ratioToDegree(ratio: number): number {
-    return this.minDeg + ratio*(this.maxDeg-this.minDeg);
+    return this.minDeg + ratio * (this.maxDeg - this.minDeg);
   }
 
   private turn(ratio: number) {
-    this.newValue = Number((this.minValue + (this.maxValue - this.minValue)*ratio).toFixed(this.ctx.decimals));
+    this.newValue = Number((this.minValue + (this.maxValue - this.minValue) * ratio).toFixed(this.decimals));
     if (this.canvasBar.value !== this.newValue) {
       this.canvasBar.value = this.newValue;
     }
@@ -337,16 +318,15 @@ export class KnobComponent extends PageComponent implements OnInit, OnDestroy {
       this.canvasBar.update({width: size, height: size} as GenericOptions);
     }
     this.setFontSize(this.knobTitle, this.title, this.knobTitleContainer.height(), this.knobTitleContainer.width());
-    this.setFontSize(this.knobError, this.error, this.knobErrorContainer.height(), this.knobErrorContainer.width());
     const minmaxHeight = this.knobMinmaxContainer.height();
-    this.minmaxLabel.css({fontSize: minmaxHeight+'px', lineHeight: minmaxHeight+'px'});
+    this.minmaxLabel.css({fontSize: minmaxHeight + 'px', lineHeight: minmaxHeight + 'px'});
     this.checkValueSize();
   }
 
   private checkValueSize() {
-    const fontSize = this.knobValueContainer.height()/3.3;
+    const fontSize = this.knobValueContainer.height() / 3.3;
     const containerWidth = this.knobValueContainer.width();
-    this.setFontSize(this.knobValue, this.value+'', fontSize, containerWidth);
+    this.setFontSize(this.knobValue, this.value + '', fontSize, containerWidth);
   }
 
   private setFontSize(element: JQuery<HTMLElement>, text: string, fontSize: number, maxWidth: number) {
@@ -358,19 +338,19 @@ export class KnobComponent extends PageComponent implements OnInit, OnDestroy {
       }
       textWidth = this.measureTextWidth(text, fontSize);
     }
-    element.css({fontSize: fontSize+'px', lineHeight: fontSize+'px'});
+    element.css({fontSize: fontSize + 'px', lineHeight: fontSize + 'px'});
   }
 
   private measureTextWidth(text: string, fontSize: number): number {
-    this.textMeasure.css({fontSize: fontSize+'px', lineHeight: fontSize+'px'});
+    this.textMeasure.css({fontSize: fontSize + 'px', lineHeight: fontSize + 'px'});
     this.textMeasure.html(text);
     return this.textMeasure.width();
   }
 
   private setValue(value: number) {
-    const ratio = (value-this.minValue) / (this.maxValue - this.minValue);
+    const ratio = (value - this.minValue) / (this.maxValue - this.minValue);
     this.rotation = this.lastDeg = this.currentDeg = this.ratioToDegree(ratio);
-    this.knobTopPointerContainer.css('transform','rotate('+(this.currentDeg)+'deg)');
+    this.knobTopPointerContainer.css('transform', 'rotate(' + (this.currentDeg) + 'deg)');
     if (this.canvasBar.value !== value) {
       this.canvasBar.value = value;
     }
@@ -397,26 +377,7 @@ export class KnobComponent extends PageComponent implements OnInit, OnDestroy {
   }
 
   private formatValue(value: any): string {
-    return this.ctx.utils.formatValue(value, this.ctx.decimals, this.ctx.units, true);
-  }
-
-  private rpcRequestValue() {
-    this.error = '';
-    this.ctx.controlApi.sendTwoWayCommand(this.getValueMethod, null, this.requestTimeout).subscribe(
-      (responseBody) => {
-        if (isNumber(responseBody)) {
-          const numValue = Number(Number(responseBody).toFixed(this.ctx.decimals));
-          this.setValue(numValue);
-        } else {
-          const errorText = `Unable to parse response: ${responseBody}`;
-          this.onError(errorText);
-        }
-      },
-      () => {
-        const errorText = this.ctx.defaultSubscription.rpcErrorText;
-        this.onError(errorText);
-      }
-    );
+    return this.valueFormat.format(value);
   }
 
   private rpcUpdateValue(value: number) {
@@ -428,26 +389,19 @@ export class KnobComponent extends PageComponent implements OnInit, OnDestroy {
       this.rpcValue = value;
       this.executingUpdateValue = true;
     }
-    this.error = '';
-    this.ctx.controlApi.sendOneWayCommand(this.setValueMethod, value, this.requestTimeout).subscribe(
-      () => {
-        this.executingUpdateValue = false;
-        if (this.scheduledValue != null && this.scheduledValue !== this.rpcValue) {
-          this.rpcUpdateValue(this.scheduledValue);
+    if (!this.ctx.isEdit && !this.ctx.isPreview) {
+      this.updateValue(this.valueSetter, value, {
+        next: () => {
+          this.executingUpdateValue = false;
+          if (this.scheduledValue != null && this.scheduledValue !== this.rpcValue) {
+            this.rpcUpdateValue(this.scheduledValue);
+          }
+        },
+        error: () => {
+          this.executingUpdateValue = false;
         }
-      },
-      () => {
-        this.executingUpdateValue = false;
-        const errorText = this.ctx.defaultSubscription.rpcErrorText;
-        this.onError(errorText);
-      }
-    );
-  }
-
-  private onError(error: string) {
-    this.error = error;
-    this.setFontSize(this.knobError, this.error, this.knobErrorContainer.height(), this.knobErrorContainer.width());
-    this.ctx.detectChanges();
+      });
+    }
   }
 
 }

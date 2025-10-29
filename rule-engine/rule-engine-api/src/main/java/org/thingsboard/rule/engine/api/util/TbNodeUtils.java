@@ -1,5 +1,5 @@
 /**
- * Copyright © 2016-2021 The Thingsboard Authors
+ * Copyright © 2016-2025 The Thingsboard Authors
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -15,13 +15,12 @@
  */
 package org.thingsboard.rule.engine.api.util;
 
-import com.fasterxml.jackson.core.JsonProcessingException;
 import com.fasterxml.jackson.databind.JsonNode;
-import com.fasterxml.jackson.databind.ObjectMapper;
-import org.springframework.util.CollectionUtils;
-import org.springframework.util.StringUtils;
+import org.thingsboard.common.util.JacksonUtil;
 import org.thingsboard.rule.engine.api.TbNodeConfiguration;
 import org.thingsboard.rule.engine.api.TbNodeException;
+import org.thingsboard.server.common.data.StringUtils;
+import org.thingsboard.server.common.data.util.CollectionsUtil;
 import org.thingsboard.server.common.msg.TbMsg;
 import org.thingsboard.server.common.msg.TbMsgMetaData;
 
@@ -30,40 +29,40 @@ import java.util.List;
 import java.util.Map;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
-import java.util.stream.Collectors;
 
-/**
- * Created by ashvayka on 19.01.18.
- */
-public class TbNodeUtils {
+public final class TbNodeUtils {
 
-    private static final ObjectMapper mapper = new ObjectMapper();
-
-    private static final String METADATA_VARIABLE_TEMPLATE = "${%s}";
+    private TbNodeUtils() {
+        throw new IllegalStateException("Utility class");
+    }
 
     private static final Pattern DATA_PATTERN = Pattern.compile("(\\$\\[)(.*?)(])");
 
-    private static final String DATA_VARIABLE_TEMPLATE = "$[%s]";
+    private static final String ALL_DATA_TEMPLATE = "$[*]";
+    private static final String ALL_METADATA_TEMPLATE = "${*}";
 
     public static <T> T convert(TbNodeConfiguration configuration, Class<T> clazz) throws TbNodeException {
         try {
-            return mapper.treeToValue(configuration.getData(), clazz);
-        } catch (JsonProcessingException e) {
-            throw new TbNodeException(e);
+            return JacksonUtil.treeToValue(configuration.getData(), clazz);
+        } catch (IllegalArgumentException e) {
+            throw new TbNodeException(e, true);
         }
     }
 
     public static List<String> processPatterns(List<String> patterns, TbMsg tbMsg) {
-        if (!CollectionUtils.isEmpty(patterns)) {
-            return patterns.stream().map(p -> processPattern(p, tbMsg)).collect(Collectors.toList());
+        if (CollectionsUtil.isEmpty(patterns)) {
+            return Collections.emptyList();
         }
-        return Collections.emptyList();
+        return patterns.stream().map(p -> processPattern(p, tbMsg)).toList();
     }
 
     public static String processPattern(String pattern, TbMsg tbMsg) {
         try {
             String result = processPattern(pattern, tbMsg.getMetaData());
-            JsonNode json = mapper.readTree(tbMsg.getData());
+            JsonNode json = JacksonUtil.toJsonNode(tbMsg.getData());
+
+            result = result.replace(ALL_DATA_TEMPLATE, JacksonUtil.toString(json));
+
             if (json.isObject()) {
                 Matcher matcher = DATA_PATTERN.matcher(result);
                 while (matcher.find()) {
@@ -71,7 +70,7 @@ public class TbNodeUtils {
                     String[] keys = group.split("\\.");
                     JsonNode jsonNode = json;
                     for (String key : keys) {
-                        if (!StringUtils.isEmpty(key) && jsonNode != null) {
+                        if (StringUtils.isNotEmpty(key) && jsonNode != null) {
                             jsonNode = jsonNode.get(key);
                         } else {
                             jsonNode = null;
@@ -80,7 +79,7 @@ public class TbNodeUtils {
                     }
 
                     if (jsonNode != null && jsonNode.isValueNode()) {
-                        result = result.replace(String.format(DATA_VARIABLE_TEMPLATE, group), jsonNode.asText());
+                        result = result.replace(formatDataVarTemplate(group), jsonNode.asText());
                     }
                 }
             }
@@ -90,24 +89,30 @@ public class TbNodeUtils {
         }
     }
 
-    public static List<String> processPatterns(List<String> patterns, TbMsgMetaData metaData) {
-        if (!CollectionUtils.isEmpty(patterns)) {
-            return patterns.stream().map(p -> processPattern(p, metaData)).collect(Collectors.toList());
-        }
-        return Collections.emptyList();
+    private static String processPattern(String pattern, TbMsgMetaData metaData) {
+        String replacement = metaData.isEmpty() ? "{}" : JacksonUtil.toString(metaData.getData());
+        pattern = pattern.replace(ALL_METADATA_TEMPLATE, replacement);
+        return processTemplate(pattern, metaData.values());
     }
 
-    public static String processPattern(String pattern, TbMsgMetaData metaData) {
-        String result = pattern;
-        for (Map.Entry<String, String> keyVal : metaData.values().entrySet()) {
-            result = processVar(result, keyVal.getKey(), keyVal.getValue());
+    public static String processTemplate(String template, Map<String, String> data) {
+        String result = template;
+        for (Map.Entry<String, String> kv : data.entrySet()) {
+            result = processVar(result, kv.getKey(), kv.getValue());
         }
         return result;
     }
 
     private static String processVar(String pattern, String key, String val) {
-        String varPattern = String.format(METADATA_VARIABLE_TEMPLATE, key);
-        return pattern.replace(varPattern, val);
+        return pattern.replace(formatMetadataVarTemplate(key), val);
+    }
+
+    static String formatDataVarTemplate(String key) {
+        return "$[" + key + "]";
+    }
+
+    static String formatMetadataVarTemplate(String key) {
+        return "${" + key + "}";
     }
 
 }

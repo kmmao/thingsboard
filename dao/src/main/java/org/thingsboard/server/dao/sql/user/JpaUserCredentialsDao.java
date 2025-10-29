@@ -1,5 +1,5 @@
 /**
- * Copyright © 2016-2021 The Thingsboard Authors
+ * Copyright © 2016-2025 The Thingsboard Authors
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -16,14 +16,19 @@
 package org.thingsboard.server.dao.sql.user;
 
 import org.springframework.beans.factory.annotation.Autowired;
-import org.springframework.data.repository.CrudRepository;
+import org.springframework.data.jpa.repository.JpaRepository;
 import org.springframework.stereotype.Component;
 import org.thingsboard.server.common.data.id.TenantId;
+import org.thingsboard.server.common.data.id.UserId;
+import org.thingsboard.server.common.data.page.PageData;
+import org.thingsboard.server.common.data.page.PageLink;
 import org.thingsboard.server.common.data.security.UserCredentials;
 import org.thingsboard.server.dao.DaoUtil;
+import org.thingsboard.server.dao.TenantEntityDao;
 import org.thingsboard.server.dao.model.sql.UserCredentialsEntity;
 import org.thingsboard.server.dao.sql.JpaAbstractDao;
 import org.thingsboard.server.dao.user.UserCredentialsDao;
+import org.thingsboard.server.dao.util.SqlDao;
 
 import java.util.UUID;
 
@@ -31,7 +36,8 @@ import java.util.UUID;
  * Created by Valerii Sosliuk on 4/22/2017.
  */
 @Component
-public class JpaUserCredentialsDao extends JpaAbstractDao<UserCredentialsEntity, UserCredentials> implements UserCredentialsDao {
+@SqlDao
+public class JpaUserCredentialsDao extends JpaAbstractDao<UserCredentialsEntity, UserCredentials> implements UserCredentialsDao, TenantEntityDao<UserCredentials> {
 
     @Autowired
     private UserCredentialsRepository userCredentialsRepository;
@@ -42,7 +48,7 @@ public class JpaUserCredentialsDao extends JpaAbstractDao<UserCredentialsEntity,
     }
 
     @Override
-    protected CrudRepository<UserCredentialsEntity, UUID> getCrudRepository() {
+    protected JpaRepository<UserCredentialsEntity, UUID> getRepository() {
         return userCredentialsRepository;
     }
 
@@ -60,4 +66,30 @@ public class JpaUserCredentialsDao extends JpaAbstractDao<UserCredentialsEntity,
     public UserCredentials findByResetToken(TenantId tenantId, String resetToken) {
         return DaoUtil.getData(userCredentialsRepository.findByResetToken(resetToken));
     }
+
+    @Override
+    public void removeByUserId(TenantId tenantId, UserId userId) {
+        userCredentialsRepository.removeByUserId(userId.getId());
+    }
+
+    @Override
+    public void setLastLoginTs(TenantId tenantId, UserId userId, long lastLoginTs) {
+        userCredentialsRepository.updateLastLoginTsByUserId(userId.getId(), lastLoginTs);
+    }
+
+    @Override
+    public int incrementFailedLoginAttempts(TenantId tenantId, UserId userId) {
+        return userCredentialsRepository.incrementFailedLoginAttemptsByUserId(userId.getId());
+    }
+
+    @Override
+    public void setFailedLoginAttempts(TenantId tenantId, UserId userId, int failedLoginAttempts) {
+        userCredentialsRepository.updateFailedLoginAttemptsByUserId(userId.getId(), failedLoginAttempts);
+    }
+
+    @Override
+    public PageData<UserCredentials> findAllByTenantId(TenantId tenantId, PageLink pageLink) {
+        return DaoUtil.toPageData(userCredentialsRepository.findByTenantId(tenantId.getId(), DaoUtil.toPageable(pageLink)));
+    }
+
 }

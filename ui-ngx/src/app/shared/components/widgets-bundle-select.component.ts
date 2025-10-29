@@ -1,5 +1,5 @@
 ///
-/// Copyright © 2016-2021 The Thingsboard Authors
+/// Copyright © 2016-2025 The Thingsboard Authors
 ///
 /// Licensed under the Apache License, Version 2.0 (the "License");
 /// you may not use this file except in compliance with the License.
@@ -14,18 +14,32 @@
 /// limitations under the License.
 ///
 
-import { Component, forwardRef, Input, OnChanges, OnInit, SimpleChanges, ViewEncapsulation } from '@angular/core';
+import {
+  ChangeDetectorRef,
+  Component,
+  forwardRef,
+  Input,
+  OnChanges,
+  OnInit,
+  SimpleChanges,
+  ViewEncapsulation
+} from '@angular/core';
 import { ControlValueAccessor, NG_VALUE_ACCESSOR } from '@angular/forms';
-import { Observable } from 'rxjs';
+import { Observable, of } from 'rxjs';
 import { map, share, tap } from 'rxjs/operators';
 import { Store } from '@ngrx/store';
 import { AppState } from '@app/core/core.state';
-import { coerceBooleanProperty } from '@angular/cdk/coercion';
 import { WidgetsBundle } from '@shared/models/widgets-bundle.model';
 import { WidgetService } from '@core/http/widget.service';
 import { isDefined } from '@core/utils';
 import { NULL_UUID } from '@shared/models/id/has-uuid';
 import { getCurrentAuthState } from '@core/auth/auth.selectors';
+import { coerceBoolean } from '@shared/decorators/coercion';
+import { MatDialog } from '@angular/material/dialog';
+import {
+  WidgetsBundleDialogComponent,
+  WidgetsBundleDialogData
+} from '@home/pages/widget/widgets-bundle-dialog.component';
 
 @Component({
   selector: 'tb-widgets-bundle-select',
@@ -44,22 +58,25 @@ export class WidgetsBundleSelectComponent implements ControlValueAccessor, OnIni
   bundlesScope: 'system' | 'tenant';
 
   @Input()
+  @coerceBoolean()
   selectFirstBundle: boolean;
 
   @Input()
   selectBundleAlias: string;
 
-  private requiredValue: boolean;
-  get required(): boolean {
-    return this.requiredValue;
-  }
   @Input()
-  set required(value: boolean) {
-    this.requiredValue = coerceBooleanProperty(value);
-  }
+  @coerceBoolean()
+  required: boolean;
 
   @Input()
   disabled: boolean;
+
+  @Input()
+  excludeBundleIds: Array<string>;
+
+  @Input()
+  @coerceBoolean()
+  createNew: boolean;
 
   widgetsBundles$: Observable<Array<WidgetsBundle>>;
 
@@ -67,10 +84,13 @@ export class WidgetsBundleSelectComponent implements ControlValueAccessor, OnIni
 
   widgetsBundle: WidgetsBundle | null;
 
-  private propagateChange = (v: any) => { };
+  onTouched = () => {};
+  private propagateChange: (value: any) => void = () => {};
 
   constructor(private store: Store<AppState>,
-              private widgetService: WidgetService) {
+              private widgetService: WidgetService,
+              private dialog: MatDialog,
+              private cd: ChangeDetectorRef) {
   }
 
   registerOnChange(fn: any): void {
@@ -78,6 +98,7 @@ export class WidgetsBundleSelectComponent implements ControlValueAccessor, OnIni
   }
 
   registerOnTouched(fn: any): void {
+    this.onTouched = fn;
   }
 
   ngOnInit() {
@@ -140,6 +161,9 @@ export class WidgetsBundleSelectComponent implements ControlValueAccessor, OnIni
         this.widgetsBundle = found;
         this.updateView();
       }
+    } else if (this.widgetsBundle) {
+      this.widgetsBundle = null;
+      this.updateView();
     }
   }
 
@@ -158,7 +182,44 @@ export class WidgetsBundleSelectComponent implements ControlValueAccessor, OnIni
     } else {
       widgetsBundlesObservable = this.widgetService.getAllWidgetsBundles();
     }
+    if (this.excludeBundleIds && this.excludeBundleIds.length) {
+      widgetsBundlesObservable = widgetsBundlesObservable.pipe(
+        map((widgetBundles) =>
+          widgetBundles.filter(w => !this.excludeBundleIds.includes(w.id.id)))
+      );
+    }
     return widgetsBundlesObservable;
+  }
+
+  compareById(f1: WidgetsBundle, f2: WidgetsBundle): boolean {
+    return f1 && f2 && f1.id.id === f2.id.id;
+  }
+
+  openWidgetsBundleDialog($event) {
+    $event.preventDefault();
+    const widgetsBundle: WidgetsBundle = {
+      title: '',
+      image: '',
+      description: '',
+      scada: true,
+      order: null
+    };
+    this.dialog.open<WidgetsBundleDialogComponent, WidgetsBundleDialogData,
+      WidgetsBundle>(WidgetsBundleDialogComponent, {
+      disableClose: true,
+      panelClass: ['tb-dialog', 'tb-fullscreen-dialog'],
+      data: {
+        widgetsBundle
+      }
+    }).afterClosed().subscribe(
+      (savedWidgetBundle) => {
+        if (savedWidgetBundle) {
+          this.widgetsBundles$ = of([...this.widgetsBundles, savedWidgetBundle]);
+          this.widgetsBundle = savedWidgetBundle;
+          this.widgetsBundleChanged();
+        }
+      }
+    );
   }
 
 }

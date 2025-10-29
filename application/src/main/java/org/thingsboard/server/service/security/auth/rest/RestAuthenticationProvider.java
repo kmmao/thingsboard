@@ -1,5 +1,5 @@
 /**
- * Copyright © 2016-2021 The Thingsboard Authors
+ * Copyright © 2016-2025 The Thingsboard Authors
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -36,35 +36,46 @@ import org.thingsboard.server.common.data.id.TenantId;
 import org.thingsboard.server.common.data.id.UserId;
 import org.thingsboard.server.common.data.security.Authority;
 import org.thingsboard.server.common.data.security.UserCredentials;
-import org.thingsboard.server.dao.audit.AuditLogService;
+import org.thingsboard.server.common.data.security.model.SecuritySettings;
+import org.thingsboard.server.common.data.security.model.UserPasswordPolicy;
 import org.thingsboard.server.dao.customer.CustomerService;
+import org.thingsboard.server.dao.exception.DataValidationException;
+import org.thingsboard.server.dao.settings.SecuritySettingsService;
 import org.thingsboard.server.dao.user.UserService;
+import org.thingsboard.server.queue.util.TbCoreComponent;
+import org.thingsboard.server.service.security.auth.MfaAuthenticationToken;
+import org.thingsboard.server.service.security.auth.MfaConfigurationToken;
+import org.thingsboard.server.service.security.auth.mfa.TwoFactorAuthService;
+import org.thingsboard.server.service.security.exception.UserPasswordNotValidException;
 import org.thingsboard.server.service.security.model.SecurityUser;
 import org.thingsboard.server.service.security.model.UserPrincipal;
 import org.thingsboard.server.service.security.system.SystemSecurityService;
-import ua_parser.Client;
 
 import java.util.UUID;
 
 
 @Component
 @Slf4j
+@TbCoreComponent
 public class RestAuthenticationProvider implements AuthenticationProvider {
 
     private final SystemSecurityService systemSecurityService;
+    private final SecuritySettingsService securitySettingsService;
     private final UserService userService;
     private final CustomerService customerService;
-    private final AuditLogService auditLogService;
+    private final TwoFactorAuthService twoFactorAuthService;
 
     @Autowired
     public RestAuthenticationProvider(final UserService userService,
                                       final CustomerService customerService,
                                       final SystemSecurityService systemSecurityService,
-                                      final AuditLogService auditLogService) {
+                                      SecuritySettingsService securitySettingsService,
+                                      TwoFactorAuthService twoFactorAuthService) {
         this.userService = userService;
         this.customerService = customerService;
         this.systemSecurityService = systemSecurityService;
-        this.auditLogService = auditLogService;
+        this.securitySettingsService = securitySettingsService;
+        this.twoFactorAuthService = twoFactorAuthService;
     }
 
     @Override
@@ -72,22 +83,42 @@ public class RestAuthenticationProvider implements AuthenticationProvider {
         Assert.notNull(authentication, "No authentication data provided");
 
         Object principal = authentication.getPrincipal();
-        if (!(principal instanceof UserPrincipal)) {
+        if (!(principal instanceof UserPrincipal userPrincipal)) {
             throw new BadCredentialsException("Authentication Failed. Bad user principal.");
         }
 
-        UserPrincipal userPrincipal =  (UserPrincipal) principal;
+        SecurityUser securityUser;
         if (userPrincipal.getType() == UserPrincipal.Type.USER_NAME) {
             String username = userPrincipal.getValue();
             String password = (String) authentication.getCredentials();
-            return authenticateByUsernameAndPassword(authentication, userPrincipal, username, password);
+
+            SecuritySettings securitySettings = securitySettingsService.getSecuritySettings();
+            UserPasswordPolicy passwordPolicy = securitySettings.getPasswordPolicy();
+            if (Boolean.TRUE.equals(passwordPolicy.getForceUserToResetPasswordIfNotValid())) {
+                try {
+                    systemSecurityService.validatePasswordByPolicy(password, passwordPolicy);
+                } catch (DataValidationException e) {
+                    throw new UserPasswordNotValidException("The entered password violates our policies. If this is your real password, please reset it.");
+                }
+            }
+
+            securityUser = authenticateByUsernameAndPassword(authentication, userPrincipal, username, password);
+            if (twoFactorAuthService.isTwoFaEnabled(securityUser.getTenantId(), securityUser)) {
+                return new MfaAuthenticationToken(securityUser);
+            } else if (twoFactorAuthService.isEnforceTwoFaEnabled(securityUser.getTenantId(), securityUser)) {
+                return new MfaConfigurationToken(securityUser);
+            } else {
+                systemSecurityService.logLoginAction(securityUser, authentication.getDetails(), ActionType.LOGIN, null);
+            }
         } else {
             String publicId = userPrincipal.getValue();
-            return authenticateByPublicId(userPrincipal, publicId);
+            securityUser = authenticateByPublicId(userPrincipal, publicId);
         }
+
+        return new UsernamePasswordAuthenticationToken(securityUser, null, securityUser.getAuthorities());
     }
 
-    private Authentication authenticateByUsernameAndPassword(Authentication authentication, UserPrincipal userPrincipal, String username, String password) {
+    private SecurityUser authenticateByUsernameAndPassword(Authentication authentication, UserPrincipal userPrincipal, String username, String password) {
         User user = userService.findUserByEmail(TenantId.SYS_TENANT_ID, username);
         if (user == null) {
             throw new UsernameNotFoundException("User not found: " + username);
@@ -103,23 +134,21 @@ public class RestAuthenticationProvider implements AuthenticationProvider {
             try {
                 systemSecurityService.validateUserCredentials(user.getTenantId(), userCredentials, username, password);
             } catch (LockedException e) {
-                logLoginAction(user, authentication, ActionType.LOCKOUT, null);
+                systemSecurityService.logLoginAction(user, authentication.getDetails(), ActionType.LOCKOUT, null);
                 throw e;
             }
 
             if (user.getAuthority() == null)
                 throw new InsufficientAuthenticationException("User has no authority assigned");
 
-            SecurityUser securityUser = new SecurityUser(user, userCredentials.isEnabled(), userPrincipal);
-            logLoginAction(user, authentication, ActionType.LOGIN, null);
-            return new UsernamePasswordAuthenticationToken(securityUser, null, securityUser.getAuthorities());
+            return new SecurityUser(user, userCredentials.isEnabled(), userPrincipal);
         } catch (Exception e) {
-            logLoginAction(user, authentication, ActionType.LOGIN, e);
+            systemSecurityService.logLoginAction(user, authentication.getDetails(), ActionType.LOGIN, e);
             throw e;
         }
     }
 
-    private Authentication authenticateByPublicId(UserPrincipal userPrincipal, String publicId) {
+    private SecurityUser authenticateByPublicId(UserPrincipal userPrincipal, String publicId) {
         CustomerId customerId;
         try {
             customerId = new CustomerId(UUID.fromString(publicId));
@@ -141,9 +170,7 @@ public class RestAuthenticationProvider implements AuthenticationProvider {
         user.setFirstName("Public");
         user.setLastName("Public");
 
-        SecurityUser securityUser = new SecurityUser(user, true, userPrincipal);
-
-        return new UsernamePasswordAuthenticationToken(securityUser, null, securityUser.getAuthorities());
+        return new SecurityUser(user, true, userPrincipal);
     }
 
     @Override
@@ -151,52 +178,4 @@ public class RestAuthenticationProvider implements AuthenticationProvider {
         return (UsernamePasswordAuthenticationToken.class.isAssignableFrom(authentication));
     }
 
-    private void logLoginAction(User user, Authentication authentication, ActionType actionType, Exception e) {
-        String clientAddress = "Unknown";
-        String browser = "Unknown";
-        String os = "Unknown";
-        String device = "Unknown";
-        if (authentication != null && authentication.getDetails() != null) {
-            if (authentication.getDetails() instanceof RestAuthenticationDetails) {
-                RestAuthenticationDetails details = (RestAuthenticationDetails)authentication.getDetails();
-                clientAddress = details.getClientAddress();
-                if (details.getUserAgent() != null) {
-                    Client userAgent = details.getUserAgent();
-                    if (userAgent.userAgent != null) {
-                        browser = userAgent.userAgent.family;
-                        if (userAgent.userAgent.major != null) {
-                            browser += " " + userAgent.userAgent.major;
-                            if (userAgent.userAgent.minor != null) {
-                                browser += "." + userAgent.userAgent.minor;
-                                if (userAgent.userAgent.patch != null) {
-                                    browser += "." + userAgent.userAgent.patch;
-                                }
-                            }
-                        }
-                    }
-                    if (userAgent.os != null) {
-                        os = userAgent.os.family;
-                        if (userAgent.os.major != null) {
-                            os += " " + userAgent.os.major;
-                            if (userAgent.os.minor != null) {
-                                os += "." + userAgent.os.minor;
-                                if (userAgent.os.patch != null) {
-                                    os += "." + userAgent.os.patch;
-                                    if (userAgent.os.patchMinor != null) {
-                                        os += "." + userAgent.os.patchMinor;
-                                    }
-                                }
-                            }
-                        }
-                    }
-                    if (userAgent.device != null) {
-                        device = userAgent.device.family;
-                    }
-                }
-            }
-        }
-        auditLogService.logEntityAction(
-                user.getTenantId(), user.getCustomerId(), user.getId(),
-                user.getName(), user.getId(), null, actionType, e, clientAddress, browser, os, device);
-    }
 }

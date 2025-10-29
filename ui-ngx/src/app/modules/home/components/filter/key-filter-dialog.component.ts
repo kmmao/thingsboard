@@ -1,5 +1,5 @@
 ///
-/// Copyright © 2016-2021 The Thingsboard Authors
+/// Copyright © 2016-2025 The Thingsboard Authors
 ///
 /// Licensed under the Apache License, Version 2.0 (the "License");
 /// you may not use this file except in compliance with the License.
@@ -19,7 +19,7 @@ import { ErrorStateMatcher } from '@angular/material/core';
 import { MAT_DIALOG_DATA, MatDialogRef } from '@angular/material/dialog';
 import { Store } from '@ngrx/store';
 import { AppState } from '@core/core.state';
-import { FormBuilder, FormControl, FormGroup, FormGroupDirective, NgForm, Validators } from '@angular/forms';
+import { UntypedFormBuilder, UntypedFormControl, UntypedFormGroup, FormGroupDirective, NgForm, Validators } from '@angular/forms';
 import { Router } from '@angular/router';
 import { DialogComponent } from '@app/shared/components/dialog.component';
 import {
@@ -35,7 +35,7 @@ import { TranslateService } from '@ngx-translate/core';
 import { entityFields } from '@shared/models/entity.models';
 import { Observable, of, Subject } from 'rxjs';
 import { filter, map, mergeMap, publishReplay, refCount, startWith, takeUntil } from 'rxjs/operators';
-import { isDefined } from '@core/utils';
+import { isBoolean, isDefined } from '@core/utils';
 import { EntityId } from '@shared/models/id/entity-id';
 import { DeviceProfileService } from '@core/http/device-profile.service';
 
@@ -63,14 +63,15 @@ export class KeyFilterDialogComponent extends
 
   private dirty = false;
   private entityKeysName: Observable<Array<string>>;
-  private destroy$ = new Subject();
+  private destroy$ = new Subject<void>();
 
-  keyFilterFormGroup: FormGroup;
+  keyFilterFormGroup: UntypedFormGroup;
 
   entityKeyTypes =
     this.data.telemetryKeysOnly ?
       [EntityKeyType.ATTRIBUTE, EntityKeyType.TIME_SERIES, EntityKeyType.CONSTANT] :
-      [EntityKeyType.ENTITY_FIELD, EntityKeyType.ATTRIBUTE, EntityKeyType.TIME_SERIES];
+      [EntityKeyType.ENTITY_FIELD, EntityKeyType.ATTRIBUTE, EntityKeyType.CLIENT_ATTRIBUTE,
+        EntityKeyType.SERVER_ATTRIBUTE, EntityKeyType.SHARED_ATTRIBUTE, EntityKeyType.TIME_SERIES];
 
   entityKeyTypeTranslations = entityKeyTypeTranslationMap;
 
@@ -96,7 +97,7 @@ export class KeyFilterDialogComponent extends
               private deviceProfileService: DeviceProfileService,
               private dialogs: DialogService,
               private translate: TranslateService,
-              private fb: FormBuilder) {
+              private fb: UntypedFormBuilder) {
     super(store, router, dialogRef);
 
     this.keyFilterFormGroup = this.fb.group(
@@ -120,19 +121,31 @@ export class KeyFilterDialogComponent extends
       this.keyFilterFormGroup.get('valueType').valueChanges.pipe(
         takeUntil(this.destroy$)
       ).subscribe((valueType: EntityKeyValueType) => {
-        const prevValue: EntityKeyValueType = this.keyFilterFormGroup.value.valueType;
+        const prevValueType: EntityKeyValueType = this.keyFilterFormGroup.value.valueType;
         const predicates: KeyFilterPredicate[] = this.keyFilterFormGroup.get('predicates').value;
-        if (prevValue && prevValue !== valueType && predicates && predicates.length) {
-          this.dialogs.confirm(this.translate.instant('filter.key-value-type-change-title'),
-            this.translate.instant('filter.key-value-type-change-message')).subscribe(
-            (result) => {
-              if (result) {
-                this.keyFilterFormGroup.get('predicates').setValue([]);
-              } else {
-                this.keyFilterFormGroup.get('valueType').setValue(prevValue, {emitEvent: false});
+        const value = this.keyFilterFormGroup.get('value')?.value;
+        if (prevValueType && prevValueType !== valueType) {
+          if (this.isConstantKeyType && this.data.telemetryKeysOnly) {
+            this.keyFilterFormGroup.get('value').setValue(null);
+          }
+          if (predicates && predicates.length) {
+            this.dialogs.confirm(this.translate.instant('filter.key-value-type-change-title'),
+              this.translate.instant('filter.key-value-type-change-message')).subscribe(
+              (result) => {
+                if (result) {
+                  this.keyFilterFormGroup.get('predicates').setValue([]);
+                } else {
+                  this.keyFilterFormGroup.get('valueType').setValue(prevValueType, {emitEvent: false});
+                  this.keyFilterFormGroup.get('value')?.setValue(value, {emitEvent: false});
+                }
               }
-            }
-          );
+            );
+          }
+        }
+        if (this.data.telemetryKeysOnly && this.isConstantKeyType && valueType === EntityKeyValueType.BOOLEAN) {
+          this.keyFilterFormGroup.get('value').clearValidators();
+          this.keyFilterFormGroup.get('value').setValue(isBoolean(value) ? value : false);
+          this.keyFilterFormGroup.get('value').updateValueAndValidity();
         }
       });
 
@@ -148,7 +161,7 @@ export class KeyFilterDialogComponent extends
           this.showAutocomplete = false;
         }
         if (this.data.telemetryKeysOnly) {
-          if (type === EntityKeyType.CONSTANT) {
+          if (type === EntityKeyType.CONSTANT && (this.keyFilterFormGroup.get('valueType').value !== EntityKeyValueType.BOOLEAN)) {
             this.keyFilterFormGroup.get('value').setValidators(Validators.required);
             this.keyFilterFormGroup.get('value').updateValueAndValidity();
           } else {
@@ -187,7 +200,7 @@ export class KeyFilterDialogComponent extends
     this.destroy$.complete();
   }
 
-  isErrorState(control: FormControl | null, form: FormGroupDirective | NgForm | null): boolean {
+  isErrorState(control: UntypedFormControl | null, form: FormGroupDirective | NgForm | null): boolean {
     const originalErrorState = this.errorStateMatcher.isErrorState(control, form);
     const customErrorState = !!(control && control.invalid && this.submitted);
     return originalErrorState || customErrorState;

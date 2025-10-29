@@ -1,5 +1,5 @@
 ///
-/// Copyright © 2016-2021 The Thingsboard Authors
+/// Copyright © 2016-2025 The Thingsboard Authors
 ///
 /// Licensed under the Apache License, Version 2.0 (the "License");
 /// you may not use this file except in compliance with the License.
@@ -17,7 +17,7 @@
 import { IStateControllerComponent, StateControllerState } from '@home/components/dashboard-page/states/state-controller.models';
 import { IDashboardController } from '../dashboard-page.models';
 import { DashboardState } from '@app/shared/models/dashboard.models';
-import { Subscription } from 'rxjs';
+import { BehaviorSubject, Observable, Subject, Subscription } from 'rxjs';
 import { NgZone, OnDestroy, OnInit, Directive } from '@angular/core';
 import { ActivatedRoute, Params, Router } from '@angular/router';
 import { StatesControllerService } from '@home/components/dashboard-page/states/states-controller.service';
@@ -27,6 +27,8 @@ import { StateObject, StateParams } from '@app/core/api/widget-api.models';
 @Directive()
 export abstract class StateControllerComponent implements IStateControllerComponent, OnInit, OnDestroy {
 
+  private stateChangedSubject = new Subject<string>();
+  protected stateIdSubject = new Subject<string>();
   stateObject: StateControllerState = [];
   dashboardCtrl: IDashboardController;
   preservedState: any;
@@ -108,6 +110,7 @@ export abstract class StateControllerComponent implements IStateControllerCompon
           const newState = this.decodeStateParam(paramMap.get('state'));
           if (this.currentState !== newState) {
             this.currentState = newState;
+            this.stateChangedSubject.next(this.currentState);
             if (this.inited) {
               this.onStateChanged();
             }
@@ -124,12 +127,15 @@ export abstract class StateControllerComponent implements IStateControllerCompon
       subscription.unsubscribe();
     });
     this.rxSubscriptions.length = 0;
+    this.stateIdSubject.complete();
+    this.stateChangedSubject.complete();
   }
 
-  protected updateStateParam(newState: string) {
+  protected updateStateParam(newState: string, replaceCurrentHistoryUrl = false) {
     this.currentState = newState;
     if (this.syncStateWithQueryParam) {
-      const queryParams: Params = {state: this.currentState};
+      const state = this.currentState ? encodeURIComponent(this.currentState) : this.currentState;
+      const queryParams: Params = {state};
       this.ngZone.run(() => {
         this.router.navigate(
           [],
@@ -137,9 +143,19 @@ export abstract class StateControllerComponent implements IStateControllerCompon
             relativeTo: this.route,
             queryParams,
             queryParamsHandling: 'merge',
+            replaceUrl: replaceCurrentHistoryUrl
           });
       });
     }
+    this.stateChangedSubject.next(this.currentState);
+  }
+
+  public stateChanged(): Observable<string> {
+    return this.stateChangedSubject.asObservable();
+  }
+
+  public stateId(): Observable<string> {
+    return this.stateIdSubject.asObservable();
   }
 
   public openRightLayout(): void {
@@ -157,6 +173,7 @@ export abstract class StateControllerComponent implements IStateControllerCompon
   public reInit() {
     this.preservedState = null;
     this.currentState = this.decodeStateParam(this.route.snapshot.queryParamMap.get('state'));
+    this.stateChangedSubject.next(this.currentState);
     this.init();
   }
 
@@ -164,7 +181,7 @@ export abstract class StateControllerComponent implements IStateControllerCompon
     return stateURI !== null ? decodeURIComponent(stateURI) : null;
   }
 
-  protected abstract init();
+  public abstract init();
 
   protected abstract onMobileChanged();
 
@@ -188,7 +205,7 @@ export abstract class StateControllerComponent implements IStateControllerCompon
 
   public abstract getStateParamsByStateId(stateId: string): StateParams;
 
-  public abstract navigatePrevState(index: number): void;
+  public abstract navigatePrevState(index: number, params?: StateParams): void;
 
   public abstract openState(id: string, params?: StateParams, openRightLayout?: boolean): void;
 

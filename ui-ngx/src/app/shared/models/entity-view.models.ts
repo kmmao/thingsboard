@@ -1,5 +1,5 @@
 ///
-/// Copyright © 2016-2021 The Thingsboard Authors
+/// Copyright © 2016-2025 The Thingsboard Authors
 ///
 /// Licensed under the Apache License, Version 2.0 (the "License");
 /// you may not use this file except in compliance with the License.
@@ -14,12 +14,13 @@
 /// limitations under the License.
 ///
 
-import { BaseData } from '@shared/models/base-data';
+import { BaseData, ExportableEntity } from '@shared/models/base-data';
 import { TenantId } from '@shared/models/id/tenant-id';
 import { CustomerId } from '@shared/models/id/customer-id';
 import { EntityViewId } from '@shared/models/id/entity-view-id';
 import { EntityId } from '@shared/models/id/entity-id';
 import { EntitySearchQuery } from '@shared/models/relation.models';
+import { HasTenantId, HasVersion } from '@shared/models/entity.models';
 
 export interface AttributesEntityView {
   cs: Array<string>;
@@ -32,7 +33,7 @@ export interface TelemetryEntityView {
   attributes: AttributesEntityView;
 }
 
-export interface EntityView extends BaseData<EntityViewId> {
+export interface EntityView extends BaseData<EntityViewId>, HasTenantId, HasVersion, ExportableEntity<EntityViewId> {
   tenantId: TenantId;
   customerId: CustomerId;
   entityId: EntityId;

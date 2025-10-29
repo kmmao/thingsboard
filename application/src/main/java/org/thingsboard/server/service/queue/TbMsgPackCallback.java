@@ -1,5 +1,5 @@
 /**
- * Copyright © 2016-2021 The Thingsboard Authors
+ * Copyright © 2016-2025 The Thingsboard Authors
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -17,6 +17,8 @@ package org.thingsboard.server.service.queue;
 
 import io.micrometer.core.instrument.Timer;
 import lombok.extern.slf4j.Slf4j;
+import org.thingsboard.common.util.ExceptionUtil;
+import org.thingsboard.server.common.data.exception.AbstractRateLimitException;
 import org.thingsboard.server.common.data.id.RuleNodeId;
 import org.thingsboard.server.common.data.id.TenantId;
 import org.thingsboard.server.common.msg.queue.RuleEngineException;
@@ -58,12 +60,32 @@ public class TbMsgPackCallback implements TbMsgCallback {
     }
 
     @Override
+    public void onRateLimit(RuleEngineException e) {
+        log.debug("[{}] ON RATE LIMIT", id, e);
+        //TODO notify tenant on rate limit
+        if (failedMsgTimer != null) {
+            failedMsgTimer.record(System.currentTimeMillis() - startMsgProcessing, TimeUnit.MILLISECONDS);
+        }
+        ctx.onSuccess(id);
+    }
+    
+    @Override
     public void onFailure(RuleEngineException e) {
+        if (ExceptionUtil.lookupExceptionInCause(e, AbstractRateLimitException.class) != null) {
+            onRateLimit(e);
+            return;
+        }
+
         log.trace("[{}] ON FAILURE", id, e);
         if (failedMsgTimer != null) {
             failedMsgTimer.record(System.currentTimeMillis() - startMsgProcessing, TimeUnit.MILLISECONDS);
         }
         ctx.onFailure(tenantId, id, e);
+    }
+
+    @Override
+    public boolean isMsgValid() {
+        return !ctx.isCanceled();
     }
 
     @Override

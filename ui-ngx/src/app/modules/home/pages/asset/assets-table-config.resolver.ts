@@ -1,5 +1,5 @@
 ///
-/// Copyright © 2016-2021 The Thingsboard Authors
+/// Copyright © 2016-2025 The Thingsboard Authors
 ///
 /// Licensed under the Apache License, Version 2.0 (the "License");
 /// you may not use this file except in compliance with the License.
@@ -16,7 +16,7 @@
 
 import { Injectable } from '@angular/core';
 
-import { ActivatedRouteSnapshot, Resolve, Router } from '@angular/router';
+import { ActivatedRouteSnapshot, Router } from '@angular/router';
 import {
   CellActionDescriptor,
   checkBoxCell,
@@ -65,7 +65,7 @@ import {
 } from '@home/dialogs/add-entities-to-edge-dialog.component';
 
 @Injectable()
-export class AssetsTableConfigResolver implements Resolve<EntityTableConfig<AssetInfo>> {
+export class AssetsTableConfigResolver  {
 
   private readonly config: EntityTableConfig<AssetInfo> = new EntityTableConfig<AssetInfo>();
 
@@ -103,8 +103,9 @@ export class AssetsTableConfigResolver implements Resolve<EntityTableConfig<Asse
         mergeMap((savedAsset) => this.assetService.getAssetInfo(savedAsset.id.id)
         ));
     };
-    this.config.onEntityAction = action => this.onAssetAction(action);
-    this.config.detailsReadonly = () => (this.config.componentsData.assetScope === 'customer_user' || this.config.componentsData.assetScope === 'edge_customer_user');
+    this.config.onEntityAction = action => this.onAssetAction(action, this.config);
+    this.config.detailsReadonly = () => (this.config.componentsData.assetScope === 'customer_user' ||
+      this.config.componentsData.assetScope === 'edge_customer_user');
 
     this.config.headerComponent = AssetTableHeaderComponent;
 
@@ -114,6 +115,7 @@ export class AssetsTableConfigResolver implements Resolve<EntityTableConfig<Asse
     const routeParams = route.params;
     this.config.componentsData = {
       assetScope: route.data.assetsType,
+      assetProfileId: null,
       assetType: '',
       edgeId: routeParams.edgeId
     };
@@ -163,8 +165,8 @@ export class AssetsTableConfigResolver implements Resolve<EntityTableConfig<Asse
     const columns: Array<EntityTableColumn<AssetInfo>> = [
       new DateEntityTableColumn<AssetInfo>('createdTime', 'common.created-time', this.datePipe, '150px'),
       new EntityTableColumn<AssetInfo>('name', 'asset.name', '25%'),
-      new EntityTableColumn<AssetInfo>('type', 'asset.asset-type', '25%'),
-      new EntityTableColumn<DeviceInfo>('label', 'asset.label', '25%'),
+      new EntityTableColumn<AssetInfo>('assetProfileName', 'asset-profile.asset-profile', '25%'),
+      new EntityTableColumn<AssetInfo>('label', 'asset.label', '25%'),
     ];
     if (assetScope === 'tenant') {
       columns.push(
@@ -181,14 +183,16 @@ export class AssetsTableConfigResolver implements Resolve<EntityTableConfig<Asse
   configureEntityFunctions(assetScope: string): void {
     if (assetScope === 'tenant') {
       this.config.entitiesFetchFunction = pageLink =>
-        this.assetService.getTenantAssetInfos(pageLink, this.config.componentsData.assetType);
+        this.assetService.getTenantAssetInfosByAssetProfileId(pageLink, this.config.componentsData.assetProfileId !== null ?
+          this.config.componentsData.assetProfileId.id : '');
       this.config.deleteEntity = id => this.assetService.deleteAsset(id.id);
     } else if (assetScope === 'edge' || assetScope === 'edge_customer_user') {
       this.config.entitiesFetchFunction = pageLink =>
         this.assetService.getEdgeAssets(this.config.componentsData.edgeId, pageLink, this.config.componentsData.assetType);
     } else {
       this.config.entitiesFetchFunction = pageLink =>
-        this.assetService.getCustomerAssetInfos(this.customerId, pageLink, this.config.componentsData.assetType);
+        this.assetService.getCustomerAssetInfosByAssetProfileId(this.customerId, pageLink,
+          this.config.componentsData.assetProfileId !== null ? this.config.componentsData.assetProfileId.id : '');
       this.config.deleteEntity = id => this.assetService.unassignAssetFromCustomer(id.id);
     }
   }
@@ -295,7 +299,7 @@ export class AssetsTableConfigResolver implements Resolve<EntityTableConfig<Asse
           name: this.translate.instant('asset.add-asset-text'),
           icon: 'insert_drive_file',
           isEnabled: () => true,
-          onAction: ($event) => this.config.table.addEntity($event)
+          onAction: ($event) => this.config.getTable().addEntity($event)
         },
         {
           name: this.translate.instant('asset.import'),
@@ -332,9 +336,17 @@ export class AssetsTableConfigResolver implements Resolve<EntityTableConfig<Asse
     this.homeDialogs.importEntities(EntityType.ASSET).subscribe((res) => {
       if (res) {
         this.broadcast.broadcast('assetSaved');
-        this.config.table.updateData();
+        this.config.updateData();
       }
     });
+  }
+
+  private openAsset($event: Event, asset: Asset, config: EntityTableConfig<AssetInfo>) {
+    if ($event) {
+      $event.stopPropagation();
+    }
+    const url = this.router.createUrlTree([asset.id.id], {relativeTo: config.getActivatedRoute()});
+    this.router.navigateByUrl(url);
   }
 
   addAssetsToCustomer($event: Event) {
@@ -352,7 +364,7 @@ export class AssetsTableConfigResolver implements Resolve<EntityTableConfig<Asse
     }).afterClosed()
       .subscribe((res) => {
         if (res) {
-          this.config.table.updateData();
+          this.config.updateData();
         }
       });
   }
@@ -371,7 +383,7 @@ export class AssetsTableConfigResolver implements Resolve<EntityTableConfig<Asse
         if (res) {
           this.assetService.makeAssetPublic(asset.id.id).subscribe(
             () => {
-              this.config.table.updateData();
+              this.config.updateData();
             }
           );
         }
@@ -394,7 +406,7 @@ export class AssetsTableConfigResolver implements Resolve<EntityTableConfig<Asse
     }).afterClosed()
       .subscribe((res) => {
         if (res) {
-          this.config.table.updateData();
+          this.config.updateData();
         }
       });
   }
@@ -423,7 +435,7 @@ export class AssetsTableConfigResolver implements Resolve<EntityTableConfig<Asse
         if (res) {
           this.assetService.unassignAssetFromCustomer(asset.id.id).subscribe(
             () => {
-              this.config.table.updateData();
+              this.config.updateData(this.config.componentsData.assetScope !== 'tenant');
             }
           );
         }
@@ -451,7 +463,7 @@ export class AssetsTableConfigResolver implements Resolve<EntityTableConfig<Asse
           );
           forkJoin(tasks).subscribe(
             () => {
-              this.config.table.updateData();
+              this.config.updateData();
             }
           );
         }
@@ -459,8 +471,11 @@ export class AssetsTableConfigResolver implements Resolve<EntityTableConfig<Asse
     );
   }
 
-  onAssetAction(action: EntityAction<AssetInfo>): boolean {
+  onAssetAction(action: EntityAction<AssetInfo>, config: EntityTableConfig<AssetInfo>): boolean {
     switch (action.action) {
+      case 'open':
+        this.openAsset(action.event, action.entity, config);
+        return true;
       case 'makePublic':
         this.makePublic(action.event, action.entity);
         return true;
@@ -492,7 +507,7 @@ export class AssetsTableConfigResolver implements Resolve<EntityTableConfig<Asse
     }).afterClosed()
       .subscribe((res) => {
         if (res) {
-          this.config.table.updateData();
+          this.config.updateData();
         }
       });
   }
@@ -511,7 +526,7 @@ export class AssetsTableConfigResolver implements Resolve<EntityTableConfig<Asse
         if (res) {
           this.assetService.unassignAssetFromEdge(this.config.componentsData.edgeId, asset.id.id).subscribe(
             () => {
-              this.config.table.updateData();
+              this.config.updateData(this.config.componentsData.assetScope !== 'tenant');
             }
           );
         }
@@ -539,7 +554,7 @@ export class AssetsTableConfigResolver implements Resolve<EntityTableConfig<Asse
           );
           forkJoin(tasks).subscribe(
             () => {
-              this.config.table.updateData();
+              this.config.updateData();
             }
           );
         }

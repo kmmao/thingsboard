@@ -1,5 +1,5 @@
 /**
- * Copyright © 2016-2021 The Thingsboard Authors
+ * Copyright © 2016-2025 The Thingsboard Authors
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -16,24 +16,20 @@
 package org.thingsboard.server.actors.stats;
 
 import com.fasterxml.jackson.databind.JsonNode;
-import com.fasterxml.jackson.databind.ObjectMapper;
 import lombok.extern.slf4j.Slf4j;
+import org.thingsboard.common.util.JacksonUtil;
 import org.thingsboard.server.actors.ActorSystemContext;
 import org.thingsboard.server.actors.TbActor;
-import org.thingsboard.server.actors.TbActorCtx;
 import org.thingsboard.server.actors.TbActorId;
 import org.thingsboard.server.actors.TbStringActorId;
 import org.thingsboard.server.actors.service.ContextAwareActor;
 import org.thingsboard.server.actors.service.ContextBasedCreator;
-import org.thingsboard.server.common.data.DataConstants;
-import org.thingsboard.server.common.data.Event;
+import org.thingsboard.server.common.data.event.StatisticsEvent;
 import org.thingsboard.server.common.msg.MsgType;
 import org.thingsboard.server.common.msg.TbActorMsg;
 
 @Slf4j
 public class StatsActor extends ContextAwareActor {
-
-    private final ObjectMapper mapper = new ObjectMapper();
 
     public StatsActor(ActorSystemContext context) {
         super(context);
@@ -51,16 +47,21 @@ public class StatsActor extends ContextAwareActor {
     }
 
     public void onStatsPersistMsg(StatsPersistMsg msg) {
-        Event event = new Event();
-        event.setEntityId(msg.getEntityId());
-        event.setTenantId(msg.getTenantId());
-        event.setType(DataConstants.STATS);
-        event.setBody(toBodyJson(systemContext.getServiceInfoProvider().getServiceId(), msg.getMessagesProcessed(), msg.getErrorsOccurred()));
-        systemContext.getEventService().save(event);
+        if (msg.isEmpty()) {
+            return;
+        }
+        systemContext.getEventService().saveAsync(StatisticsEvent.builder()
+                .tenantId(msg.getTenantId())
+                .entityId(msg.getEntityId().getId())
+                .serviceId(systemContext.getServiceInfoProvider().getServiceId())
+                .messagesProcessed(msg.getMessagesProcessed())
+                .errorsOccurred(msg.getErrorsOccurred())
+                .build()
+        );
     }
 
     private JsonNode toBodyJson(String serviceId, long messagesProcessed, long errorsOccurred) {
-        return mapper.createObjectNode().put("server", serviceId).put("messagesProcessed", messagesProcessed).put("errorsOccurred", errorsOccurred);
+        return JacksonUtil.newObjectNode().put("server", serviceId).put("messagesProcessed", messagesProcessed).put("errorsOccurred", errorsOccurred);
     }
 
     public static class ActorCreator extends ContextBasedCreator {

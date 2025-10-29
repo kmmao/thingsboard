@@ -1,5 +1,5 @@
 /**
- * Copyright © 2016-2021 The Thingsboard Authors
+ * Copyright © 2016-2025 The Thingsboard Authors
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -16,11 +16,16 @@
 package org.thingsboard.server.common.msg.tools;
 
 import io.github.bucket4j.Bandwidth;
-import io.github.bucket4j.Bucket4j;
+import io.github.bucket4j.BandwidthBuilder;
+import io.github.bucket4j.Bucket;
 import io.github.bucket4j.local.LocalBucket;
 import io.github.bucket4j.local.LocalBucketBuilder;
+import lombok.Getter;
+import org.thingsboard.server.common.data.limit.RateLimitEntry;
+import org.thingsboard.server.common.data.limit.RateLimitUtil;
 
 import java.time.Duration;
+import java.util.List;
 
 /**
  * Created by ashvayka on 22.10.18.
@@ -28,22 +33,28 @@ import java.time.Duration;
 public class TbRateLimits {
     private final LocalBucket bucket;
 
+    @Getter
+    private final String configuration;
+
     public TbRateLimits(String limitsConfiguration) {
-        LocalBucketBuilder builder = Bucket4j.builder();
-        boolean initialized = false;
-        for (String limitSrc : limitsConfiguration.split(",")) {
-            long capacity = Long.parseLong(limitSrc.split(":")[0]);
-            long duration = Long.parseLong(limitSrc.split(":")[1]);
-            builder.addLimit(Bandwidth.simple(capacity, Duration.ofSeconds(duration)));
-            initialized = true;
-        }
-        if (initialized) {
-            bucket = builder.build();
-        } else {
+        this(limitsConfiguration, false);
+    }
+
+    public TbRateLimits(String limitsConfiguration, boolean refillIntervally) {
+        List<RateLimitEntry> limitedApiEntries = RateLimitUtil.parseConfig(limitsConfiguration);
+        if (limitedApiEntries.isEmpty()) {
             throw new IllegalArgumentException("Failed to parse rate limits configuration: " + limitsConfiguration);
         }
-
-
+        LocalBucketBuilder localBucket = Bucket.builder();
+        for (RateLimitEntry entry : limitedApiEntries) {
+            BandwidthBuilder.BandwidthBuilderRefillStage bandwidthBuilder = Bandwidth.builder().capacity(entry.capacity());
+            Bandwidth bandwidth = refillIntervally ?
+                    bandwidthBuilder.refillIntervally(entry.capacity(), Duration.ofSeconds(entry.durationSeconds())).build() :
+                    bandwidthBuilder.refillGreedy(entry.capacity(), Duration.ofSeconds(entry.durationSeconds())).build();
+            localBucket.addLimit(bandwidth);
+        }
+        this.bucket = localBucket.build();
+        this.configuration = limitsConfiguration;
     }
 
     public boolean tryConsume() {

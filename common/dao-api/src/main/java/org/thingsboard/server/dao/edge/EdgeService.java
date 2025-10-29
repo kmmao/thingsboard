@@ -1,5 +1,5 @@
 /**
- * Copyright © 2016-2021 The Thingsboard Authors
+ * Copyright © 2016-2025 The Thingsboard Authors
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -21,18 +21,19 @@ import org.thingsboard.server.common.data.edge.Edge;
 import org.thingsboard.server.common.data.edge.EdgeInfo;
 import org.thingsboard.server.common.data.edge.EdgeSearchQuery;
 import org.thingsboard.server.common.data.id.CustomerId;
-import org.thingsboard.server.common.data.id.DashboardId;
 import org.thingsboard.server.common.data.id.EdgeId;
 import org.thingsboard.server.common.data.id.EntityId;
 import org.thingsboard.server.common.data.id.RuleChainId;
 import org.thingsboard.server.common.data.id.TenantId;
+import org.thingsboard.server.common.data.id.TenantProfileId;
 import org.thingsboard.server.common.data.page.PageData;
 import org.thingsboard.server.common.data.page.PageLink;
+import org.thingsboard.server.dao.entity.EntityDaoService;
 
 import java.util.List;
 import java.util.Optional;
 
-public interface EdgeService {
+public interface EdgeService extends EntityDaoService {
 
     Edge findEdgeById(TenantId tenantId, EdgeId edgeId);
 
@@ -42,7 +43,11 @@ public interface EdgeService {
 
     Edge findEdgeByTenantIdAndName(TenantId tenantId, String name);
 
+    ListenableFuture<Edge> findEdgeByTenantIdAndNameAsync(TenantId tenantId, String name);
+
     Optional<Edge> findEdgeByRoutingKey(TenantId tenantId, String routingKey);
+
+    PageData<Edge> findActiveEdges(PageLink pageLink);
 
     Edge saveEdge(Edge edge);
 
@@ -51,6 +56,8 @@ public interface EdgeService {
     Edge unassignEdgeFromCustomer(TenantId tenantId, EdgeId edgeId);
 
     void deleteEdge(TenantId tenantId, EdgeId edgeId);
+
+    PageData<EdgeId> findEdgeIdsByTenantId(TenantId tenantId, PageLink pageLink);
 
     PageData<Edge> findEdgesByTenantId(TenantId tenantId, PageLink pageLink);
 
@@ -82,15 +89,20 @@ public interface EdgeService {
 
     void assignDefaultRuleChainsToEdge(TenantId tenantId, EdgeId edgeId);
 
-    ListenableFuture<List<Edge>> findEdgesByTenantIdAndRuleChainId(TenantId tenantId, RuleChainId ruleChainId);
+    PageData<Edge> findEdgesByTenantIdAndEntityId(TenantId tenantId, EntityId ruleChainId, PageLink pageLink);
 
-    ListenableFuture<List<Edge>> findEdgesByTenantIdAndDashboardId(TenantId tenantId, DashboardId dashboardId);
+    PageData<EdgeId> findEdgeIdsByTenantIdAndEntityId(TenantId tenantId, EntityId ruleChainId, PageLink pageLink);
 
-    ListenableFuture<List<EdgeId>> findRelatedEdgeIdsByEntityId(TenantId tenantId, EntityId entityId);
+    PageData<Edge> findEdgesByTenantProfileId(TenantProfileId tenantProfileId, PageLink pageLink);
 
-    Object checkInstance(Object request);
+    List<EdgeId> findAllRelatedEdgeIds(TenantId tenantId, EntityId entityId);
 
-    Object activateInstance(String licenseSecret, String releaseDate);
+    PageData<EdgeId> findRelatedEdgeIdsByEntityId(TenantId tenantId, EntityId entityId, PageLink pageLink);
 
-    String findMissingToRelatedRuleChains(TenantId tenantId, EdgeId edgeId);
+    String findMissingToRelatedRuleChains(TenantId tenantId, EdgeId edgeId, String tbRuleChainInputNodeClassName);
+
+    Edge setEdgeRootRuleChain(TenantId tenantId, Edge edge, RuleChainId ruleChainId) throws Exception;
+
+    ListenableFuture<Boolean> isEdgeActiveAsync(TenantId tenantId, EdgeId edgeId, String activityState);
+
 }

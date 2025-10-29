@@ -1,5 +1,5 @@
 /**
- * Copyright © 2016-2021 The Thingsboard Authors
+ * Copyright © 2016-2025 The Thingsboard Authors
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -18,14 +18,11 @@ package org.thingsboard.server.common.data.device.data;
 import com.fasterxml.jackson.annotation.JsonIgnore;
 import lombok.Data;
 import lombok.ToString;
-import org.apache.commons.lang3.ObjectUtils;
-import org.apache.commons.lang3.StringUtils;
 import org.thingsboard.server.common.data.DeviceTransportType;
+import org.thingsboard.server.common.data.StringUtils;
 import org.thingsboard.server.common.data.transport.snmp.AuthenticationProtocol;
 import org.thingsboard.server.common.data.transport.snmp.PrivacyProtocol;
 import org.thingsboard.server.common.data.transport.snmp.SnmpProtocolVersion;
-
-import java.util.Objects;
 
 @Data
 @ToString(of = {"host", "port", "protocolVersion"})
@@ -50,6 +47,13 @@ public class SnmpDeviceTransportConfiguration implements DeviceTransportConfigur
     private PrivacyProtocol privacyProtocol;
     private String privacyPassphrase;
     private String engineId;
+
+    public SnmpDeviceTransportConfiguration() {
+        this.host = "localhost";
+        this.port = 161;
+        this.protocolVersion = SnmpProtocolVersion.V2C;
+        this.community = "public";
+    }
 
     @Override
     public DeviceTransportType getType() {
@@ -76,7 +80,7 @@ public class SnmpDeviceTransportConfiguration implements DeviceTransportConfigur
                     isValid = StringUtils.isNotBlank(username) && StringUtils.isNotBlank(securityName)
                             && contextName != null && authenticationProtocol != null
                             && StringUtils.isNotBlank(authenticationPassphrase)
-                            && privacyProtocol != null && privacyPassphrase != null && engineId != null;
+                            && privacyProtocol != null && StringUtils.isNotBlank(privacyPassphrase) && engineId != null;
                     break;
             }
         }

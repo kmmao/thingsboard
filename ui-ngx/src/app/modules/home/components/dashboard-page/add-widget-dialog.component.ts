@@ -1,5 +1,5 @@
 ///
-/// Copyright © 2016-2021 The Thingsboard Authors
+/// Copyright © 2016-2025 The Thingsboard Authors
 ///
 /// Licensed under the Apache License, Version 2.0 (the "License");
 /// you may not use this file except in compliance with the License.
@@ -14,96 +14,146 @@
 /// limitations under the License.
 ///
 
-import { Component, Inject, OnInit, SkipSelf } from '@angular/core';
+import { Component, Inject, OnInit, SkipSelf, ViewChild, ViewEncapsulation } from '@angular/core';
 import { ErrorStateMatcher } from '@angular/material/core';
 import { MAT_DIALOG_DATA, MatDialogRef } from '@angular/material/dialog';
 import { Store } from '@ngrx/store';
 import { AppState } from '@core/core.state';
-import { FormBuilder, FormControl, FormGroup, FormGroupDirective, NgForm } from '@angular/forms';
+import { FormGroupDirective, NgForm, UntypedFormBuilder, UntypedFormControl, UntypedFormGroup } from '@angular/forms';
 import { Router } from '@angular/router';
 import { DialogComponent } from '@app/shared/components/dialog.component';
-import { Widget, widgetTypesData } from '@shared/models/widget.models';
+import { Widget, WidgetConfigMode, widgetTypesData } from '@shared/models/widget.models';
 import { Dashboard } from '@app/shared/models/dashboard.models';
-import { IAliasController } from '@core/api/widget-api.models';
+import { IAliasController, IStateController } from '@core/api/widget-api.models';
 import { WidgetConfigComponentData, WidgetInfo } from '@home/models/widget-component.models';
-import { isDefined, isString } from '@core/utils';
+import { isDefined, isDefinedAndNotNull } from '@core/utils';
+import { TranslateService } from '@ngx-translate/core';
+import { WidgetConfigComponent } from '@home/components/widget/widget-config.component';
+import { DataKeySettingsFunction } from '@home/components/widget/lib/settings/common/key/data-keys.component.models';
 
 export interface AddWidgetDialogData {
   dashboard: Dashboard;
   aliasController: IAliasController;
+  stateController: IStateController;
   widget: Widget;
   widgetInfo: WidgetInfo;
+  showLayoutConfig: boolean;
+  isDefaultBreakpoint: boolean;
 }
 
 @Component({
   selector: 'tb-add-widget-dialog',
   templateUrl: './add-widget-dialog.component.html',
-  providers: [{provide: ErrorStateMatcher, useExisting: AddWidgetDialogComponent}],
-  styleUrls: []
+  providers: [/*{provide: ErrorStateMatcher, useExisting: AddWidgetDialogComponent}*/],
+  styleUrls: ['./add-widget-dialog.component.scss'],
+  encapsulation: ViewEncapsulation.None
 })
 export class AddWidgetDialogComponent extends DialogComponent<AddWidgetDialogComponent, Widget>
   implements OnInit, ErrorStateMatcher {
 
-  widgetFormGroup: FormGroup;
+  @ViewChild('widgetConfigComponent')
+  widgetConfigComponent: WidgetConfigComponent;
+
+  widgetFormGroup: UntypedFormGroup;
 
   dashboard: Dashboard;
   aliasController: IAliasController;
+  stateController: IStateController;
   widget: Widget;
+
+  showLayoutConfig = true;
+  isDefaultBreakpoint = true;
+
+  widgetConfig: WidgetConfigComponentData;
+
+  previewMode = false;
+
+  hideHeader = false;
+
+  private readonly initialWidgetConfigMode: WidgetConfigMode;
+
+  get widgetConfigMode(): WidgetConfigMode {
+    return this.widgetConfigComponent?.widgetConfigMode || this.initialWidgetConfigMode;
+  }
+
+  set widgetConfigMode(widgetConfigMode: WidgetConfigMode) {
+    this.widgetConfigComponent.setWidgetConfigMode(widgetConfigMode);
+    this.hideHeader = this.widgetConfigComponent?.widgetConfigMode === WidgetConfigMode.basic;
+  }
 
   submitted = false;
 
   constructor(protected store: Store<AppState>,
               protected router: Router,
+              public translate: TranslateService,
               @Inject(MAT_DIALOG_DATA) public data: AddWidgetDialogData,
               @SkipSelf() private errorStateMatcher: ErrorStateMatcher,
               public dialogRef: MatDialogRef<AddWidgetDialogComponent, Widget>,
-              private fb: FormBuilder) {
+              private fb: UntypedFormBuilder) {
     super(store, router, dialogRef);
 
     this.dashboard = this.data.dashboard;
     this.aliasController = this.data.aliasController;
+    this.stateController = this.data.stateController;
     this.widget = this.data.widget;
+    this.showLayoutConfig = this.data.showLayoutConfig;
+    this.isDefaultBreakpoint = this.data.isDefaultBreakpoint;
 
     const widgetInfo = this.data.widgetInfo;
 
-    const rawSettingsSchema = widgetInfo.typeSettingsSchema || widgetInfo.settingsSchema;
-    const rawDataKeySettingsSchema = widgetInfo.typeDataKeySettingsSchema || widgetInfo.dataKeySettingsSchema;
+    const settingsForm = widgetInfo.typeSettingsForm?.length ?
+      widgetInfo.typeSettingsForm : (widgetInfo.settingsForm || []);
+    const dataKeySettingsForm = widgetInfo.typeDataKeySettingsForm?.length ?
+      widgetInfo.typeDataKeySettingsForm : (widgetInfo.dataKeySettingsForm || []);
+    const latestDataKeySettingsForm = widgetInfo.typeLatestDataKeySettingsForm?.length ?
+      widgetInfo.typeLatestDataKeySettingsForm : (widgetInfo.latestDataKeySettingsForm || []);
     const typeParameters = widgetInfo.typeParameters;
+    const dataKeySettingsFunction: DataKeySettingsFunction = typeParameters?.dataKeySettingsFunction;
     const actionSources = widgetInfo.actionSources;
     const isDataEnabled = isDefined(widgetInfo.typeParameters) ? !widgetInfo.typeParameters.useCustomDatasources : true;
-    let settingsSchema;
-    if (!rawSettingsSchema || rawSettingsSchema === '') {
-      settingsSchema = {};
-    } else {
-      settingsSchema = isString(rawSettingsSchema) ? JSON.parse(rawSettingsSchema) : rawSettingsSchema;
-    }
-    let dataKeySettingsSchema;
-    if (!rawDataKeySettingsSchema || rawDataKeySettingsSchema === '') {
-      dataKeySettingsSchema = {};
-    } else {
-      dataKeySettingsSchema = isString(rawDataKeySettingsSchema) ? JSON.parse(rawDataKeySettingsSchema) : rawDataKeySettingsSchema;
-    }
-    const widgetConfig: WidgetConfigComponentData = {
+
+    this.widgetConfig = {
+      widgetName: widgetInfo.widgetName,
       config: this.widget.config,
-      layout: {},
+      layout: {
+        resizable: this.widget.config.resizable,
+        preserveAspectRatio: this.widget.config.preserveAspectRatio,
+        mobileHide: this.widget.config.mobileHide,
+        desktopHide: this.widget.config.desktopHide,
+        mobileOrder: this.widget.config.mobileOrder,
+        mobileHeight: this.widget.config.mobileHeight
+      },
       widgetType: this.widget.type,
       typeParameters,
       actionSources,
       isDataEnabled,
-      settingsSchema,
-      dataKeySettingsSchema
+      settingsForm,
+      dataKeySettingsForm,
+      latestDataKeySettingsForm,
+      dataKeySettingsFunction,
+      settingsDirective: widgetInfo.settingsDirective,
+      dataKeySettingsDirective: widgetInfo.dataKeySettingsDirective,
+      latestDataKeySettingsDirective: widgetInfo.latestDataKeySettingsDirective,
+      hasBasicMode: isDefinedAndNotNull(widgetInfo.hasBasicMode) ? widgetInfo.hasBasicMode : false,
+      basicModeDirective: widgetInfo.basicModeDirective
     };
+    if (this.widgetConfig.hasBasicMode && this.widgetConfig.config?.configMode === WidgetConfigMode.basic) {
+      this.hideHeader = true;
+      this.initialWidgetConfigMode = WidgetConfigMode.basic;
+    } else {
+      this.initialWidgetConfigMode = WidgetConfigMode.advanced;
+    }
 
     this.widgetFormGroup = this.fb.group({
-        widgetConfig: [widgetConfig, []]
+        widgetConfig: [this.widgetConfig, []]
       }
     );
   }
 
-  ngOnInit(): void {
+  ngOnInit() {
   }
 
-  isErrorState(control: FormControl | null, form: FormGroupDirective | NgForm | null): boolean {
+  isErrorState(control: UntypedFormControl | null, form: FormGroupDirective | NgForm | null): boolean {
     const originalErrorState = this.errorStateMatcher.isErrorState(control, form);
     const customErrorState = !!(control && control.invalid && this.submitted);
     return originalErrorState || customErrorState;
@@ -127,6 +177,10 @@ export class AddWidgetDialogComponent extends DialogComponent<AddWidgetDialogCom
     this.widget.config = widgetConfig.config;
     this.widget.config.mobileOrder = widgetConfig.layout.mobileOrder;
     this.widget.config.mobileHeight = widgetConfig.layout.mobileHeight;
+    this.widget.config.mobileHide = widgetConfig.layout.mobileHide;
+    this.widget.config.desktopHide = widgetConfig.layout.desktopHide;
+    this.widget.config.preserveAspectRatio = widgetConfig.layout.preserveAspectRatio;
+    this.widget.config.resizable = widgetConfig.layout.resizable;
     this.dialogRef.close(this.widget);
   }
 }

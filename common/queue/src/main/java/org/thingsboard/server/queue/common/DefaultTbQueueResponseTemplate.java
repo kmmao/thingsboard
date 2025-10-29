@@ -1,5 +1,5 @@
 /**
- * Copyright © 2016-2021 The Thingsboard Authors
+ * Copyright © 2016-2025 The Thingsboard Authors
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -17,19 +17,19 @@ package org.thingsboard.server.queue.common;
 
 import lombok.Builder;
 import lombok.extern.slf4j.Slf4j;
+import org.thingsboard.common.util.ThingsBoardExecutors;
 import org.thingsboard.common.util.ThingsBoardThreadFactory;
 import org.thingsboard.server.common.msg.queue.TopicPartitionInfo;
+import org.thingsboard.server.common.stats.MessagesStats;
 import org.thingsboard.server.queue.TbQueueConsumer;
 import org.thingsboard.server.queue.TbQueueHandler;
 import org.thingsboard.server.queue.TbQueueMsg;
 import org.thingsboard.server.queue.TbQueueProducer;
 import org.thingsboard.server.queue.TbQueueResponseTemplate;
-import org.thingsboard.server.common.stats.MessagesStats;
 
 import java.util.List;
+import java.util.Set;
 import java.util.UUID;
-import java.util.concurrent.ConcurrentHashMap;
-import java.util.concurrent.ConcurrentMap;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 import java.util.concurrent.ScheduledExecutorService;
@@ -42,7 +42,6 @@ public class DefaultTbQueueResponseTemplate<Request extends TbQueueMsg, Response
 
     private final TbQueueConsumer<Request> requestTemplate;
     private final TbQueueProducer<Response> responseTemplate;
-    private final ConcurrentMap<UUID, String> pendingRequests;
     private final ExecutorService loopExecutor;
     private final ScheduledExecutorService timeoutExecutor;
     private final ExecutorService callbackExecutor;
@@ -65,20 +64,27 @@ public class DefaultTbQueueResponseTemplate<Request extends TbQueueMsg, Response
                                           MessagesStats stats) {
         this.requestTemplate = requestTemplate;
         this.responseTemplate = responseTemplate;
-        this.pendingRequests = new ConcurrentHashMap<>();
         this.maxPendingRequests = maxPendingRequests;
         this.pollInterval = pollInterval;
         this.requestTimeout = requestTimeout;
         this.callbackExecutor = executor;
         this.stats = stats;
-        this.timeoutExecutor = Executors.newSingleThreadScheduledExecutor(ThingsBoardThreadFactory.forName("tb-queue-response-template-timeout-" + requestTemplate.getTopic()));
+        this.timeoutExecutor = ThingsBoardExecutors.newSingleThreadScheduledExecutor("tb-queue-response-template-timeout-" + requestTemplate.getTopic());
         this.loopExecutor = Executors.newSingleThreadExecutor(ThingsBoardThreadFactory.forName("tb-queue-response-template-loop-" + requestTemplate.getTopic()));
     }
 
     @Override
-    public void init(TbQueueHandler<Request, Response> handler) {
-        this.responseTemplate.init();
+    public void subscribe() {
         requestTemplate.subscribe();
+    }
+
+    @Override
+    public void subscribe(Set<TopicPartitionInfo> partitions) {
+        requestTemplate.subscribe(partitions);
+    }
+
+    @Override
+    public void launch(TbQueueHandler<Request, Response> handler) {
         loopExecutor.submit(() -> {
             while (!stopped) {
                 try {
@@ -97,8 +103,8 @@ public class DefaultTbQueueResponseTemplate<Request extends TbQueueMsg, Response
 
                     requests.forEach(request -> {
                         long currentTime = System.currentTimeMillis();
-                        long requestTime = bytesToLong(request.getHeaders().get(REQUEST_TIME));
-                        if (requestTime + requestTimeout >= currentTime) {
+                        long expireTs = bytesToLong(request.getHeaders().get(EXPIRE_TS_HEADER));
+                        if (expireTs >= currentTime) {
                             byte[] requestIdHeader = request.getHeaders().get(REQUEST_ID_HEADER);
                             if (requestIdHeader == null) {
                                 log.error("[{}] Missing requestId in header", request);

@@ -1,5 +1,5 @@
 /**
- * Copyright © 2016-2021 The Thingsboard Authors
+ * Copyright © 2016-2025 The Thingsboard Authors
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -21,39 +21,54 @@ import org.springframework.security.oauth2.client.registration.ClientRegistratio
 import org.springframework.security.oauth2.core.AuthorizationGrantType;
 import org.springframework.security.oauth2.core.ClientAuthenticationMethod;
 import org.springframework.stereotype.Component;
-import org.thingsboard.server.common.data.oauth2.OAuth2ClientRegistrationInfo;
+import org.thingsboard.server.common.data.id.OAuth2ClientId;
+import org.thingsboard.server.common.data.id.TenantId;
+import org.thingsboard.server.common.data.oauth2.OAuth2Client;
 
 import java.util.UUID;
 
 @Component
 public class HybridClientRegistrationRepository implements ClientRegistrationRepository {
+
     private static final String defaultRedirectUriTemplate = "{baseUrl}/login/oauth2/code/{registrationId}";
 
     @Autowired
-    private OAuth2Service oAuth2Service;
+    private OAuth2ClientService oAuth2ClientService;
 
     @Override
     public ClientRegistration findByRegistrationId(String registrationId) {
-        OAuth2ClientRegistrationInfo oAuth2ClientRegistrationInfo = oAuth2Service.findClientRegistrationInfo(UUID.fromString(registrationId));
-        return oAuth2ClientRegistrationInfo == null ?
-                null : toSpringClientRegistration(oAuth2ClientRegistrationInfo);
+        OAuth2Client oAuth2Client = oAuth2ClientService.findOAuth2ClientById(TenantId.SYS_TENANT_ID, new OAuth2ClientId(UUID.fromString(registrationId)));
+        if (oAuth2Client == null) {
+            return null;
+        }
+        return toSpringClientRegistration(oAuth2Client);
     }
 
-    private ClientRegistration toSpringClientRegistration(OAuth2ClientRegistrationInfo localClientRegistration){
-        String registrationId = localClientRegistration.getUuidId().toString();
+    private ClientRegistration toSpringClientRegistration(OAuth2Client oAuth2Client) {
+        String registrationId = oAuth2Client.getUuidId().toString();
+
+        // NONE is used if we need pkce-based code challenge
+        ClientAuthenticationMethod authMethod = ClientAuthenticationMethod.NONE;
+        if (oAuth2Client.getClientAuthenticationMethod().equals("POST")) {
+            authMethod = ClientAuthenticationMethod.CLIENT_SECRET_POST;
+        } else if (oAuth2Client.getClientAuthenticationMethod().equals("BASIC")) {
+            authMethod = ClientAuthenticationMethod.CLIENT_SECRET_BASIC;
+        }
+
         return ClientRegistration.withRegistrationId(registrationId)
-                .clientName(localClientRegistration.getName())
-                .clientId(localClientRegistration.getClientId())
-                .authorizationUri(localClientRegistration.getAuthorizationUri())
-                .clientSecret(localClientRegistration.getClientSecret())
-                .tokenUri(localClientRegistration.getAccessTokenUri())
-                .scope(localClientRegistration.getScope())
+                .clientName(oAuth2Client.getName())
+                .clientId(oAuth2Client.getClientId())
+                .authorizationUri(oAuth2Client.getAuthorizationUri())
+                .clientSecret(oAuth2Client.getClientSecret())
+                .tokenUri(oAuth2Client.getAccessTokenUri())
+                .scope(oAuth2Client.getScope())
                 .authorizationGrantType(AuthorizationGrantType.AUTHORIZATION_CODE)
-                .userInfoUri(localClientRegistration.getUserInfoUri())
-                .userNameAttributeName(localClientRegistration.getUserNameAttributeName())
-                .jwkSetUri(localClientRegistration.getJwkSetUri())
-                .clientAuthenticationMethod(new ClientAuthenticationMethod(localClientRegistration.getClientAuthenticationMethod()))
+                .userInfoUri(oAuth2Client.getUserInfoUri())
+                .userNameAttributeName(oAuth2Client.getUserNameAttributeName())
+                .jwkSetUri(oAuth2Client.getJwkSetUri())
+                .clientAuthenticationMethod(authMethod)
                 .redirectUri(defaultRedirectUriTemplate)
                 .build();
     }
+
 }

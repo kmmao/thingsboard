@@ -1,5 +1,5 @@
 /**
- * Copyright © 2016-2021 The Thingsboard Authors
+ * Copyright © 2016-2025 The Thingsboard Authors
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -15,123 +15,129 @@
  */
 package org.thingsboard.server.coapserver;
 
-import com.google.common.io.Resources;
+import lombok.Getter;
 import lombok.extern.slf4j.Slf4j;
+import org.eclipse.californium.elements.config.Configuration;
 import org.eclipse.californium.elements.util.SslContextUtil;
 import org.eclipse.californium.scandium.config.DtlsConnectorConfig;
 import org.eclipse.californium.scandium.dtls.CertificateType;
-import org.eclipse.californium.scandium.dtls.x509.StaticNewAdvancedCertificateVerifier;
+import org.eclipse.californium.scandium.dtls.MaxFragmentLengthExtension.Length;
+import org.eclipse.californium.scandium.dtls.x509.SingleCertificateProvider;
 import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.beans.factory.annotation.Qualifier;
 import org.springframework.beans.factory.annotation.Value;
-import org.springframework.boot.autoconfigure.condition.ConditionalOnExpression;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
+import org.springframework.boot.context.properties.ConfigurationProperties;
+import org.springframework.context.annotation.Bean;
 import org.springframework.stereotype.Component;
 import org.thingsboard.server.common.transport.TransportService;
+import org.thingsboard.server.common.transport.config.ssl.SslCredentials;
+import org.thingsboard.server.common.transport.config.ssl.SslCredentialsConfig;
 import org.thingsboard.server.queue.discovery.TbServiceInfoProvider;
 
-import java.io.IOException;
 import java.net.InetAddress;
 import java.net.InetSocketAddress;
 import java.net.UnknownHostException;
-import java.security.GeneralSecurityException;
-import java.security.cert.Certificate;
 import java.util.Collections;
-import java.util.Optional;
 
+import static java.util.concurrent.TimeUnit.MILLISECONDS;
+import static org.eclipse.californium.elements.config.CertificateAuthenticationMode.WANTED;
+import static org.eclipse.californium.scandium.config.DtlsConfig.DTLS_CLIENT_AUTHENTICATION_MODE;
+import static org.eclipse.californium.scandium.config.DtlsConfig.DTLS_CONNECTION_ID_LENGTH;
+import static org.eclipse.californium.scandium.config.DtlsConfig.DTLS_CONNECTION_ID_NODE_ID;
+import static org.eclipse.californium.scandium.config.DtlsConfig.DTLS_MAX_FRAGMENT_LENGTH;
+import static org.eclipse.californium.scandium.config.DtlsConfig.DTLS_MAX_TRANSMISSION_UNIT;
+import static org.eclipse.californium.scandium.config.DtlsConfig.DTLS_RETRANSMISSION_TIMEOUT;
+import static org.eclipse.californium.scandium.config.DtlsConfig.DTLS_ROLE;
+import static org.eclipse.californium.scandium.config.DtlsConfig.DtlsRole.SERVER_ONLY;
+
+@Getter
 @Slf4j
-@ConditionalOnProperty(prefix = "transport.coap.dtls", value = "enabled", havingValue = "true", matchIfMissing = false)
+@ConditionalOnProperty(prefix = "coap.dtls", value = "enabled", havingValue = "true")
 @Component
 public class TbCoapDtlsSettings {
 
-    @Value("${transport.coap.dtls.bind_address}")
+    @Value("${coap.dtls.bind_address}")
     private String host;
 
-    @Value("${transport.coap.dtls.bind_port}")
+    @Value("${coap.dtls.bind_port}")
     private Integer port;
 
-    @Value("${transport.coap.dtls.mode:NO_AUTH}")
-    private String mode;
+    @Value("${coap.dtls.retransmission_timeout:9000}")
+    private int dtlsRetransmissionTimeout;
 
-    @Value("${transport.coap.dtls.key_store}")
-    private String keyStoreFile;
+    @Value("${coap.dtls.connection_id_length:}")
+    private Integer cIdLength;
 
-    @Value("${transport.coap.dtls.key_store_password}")
-    private String keyStorePassword;
+    @Value("${coap.dtls.max_transmission_unit:1024}")
+    private Integer maxTransmissionUnit;
 
-    @Value("${transport.coap.dtls.key_password}")
-    private String keyPassword;
+    @Value("${coap.dtls.max_fragment_length:1024}")
+    private Integer maxFragmentLength;
 
-    @Value("${transport.coap.dtls.key_alias}")
-    private String keyAlias;
+    @Bean
+    @ConfigurationProperties(prefix = "coap.dtls.credentials")
+    public SslCredentialsConfig coapDtlsCredentials() {
+        return new SslCredentialsConfig("COAP DTLS Credentials", false);
+    }
 
-    @Value("${transport.coap.dtls.x509.skip_validity_check_for_client_cert:false}")
+    @Autowired
+    @Qualifier("coapDtlsCredentials")
+    private SslCredentialsConfig coapDtlsCredentialsConfig;
+
+    @Value("${coap.dtls.x509.skip_validity_check_for_client_cert:false}")
     private boolean skipValidityCheckForClientCert;
 
-    @Value("${transport.coap.dtls.x509.dtls_session_inactivity_timeout:86400000}")
+    @Value("${coap.dtls.x509.dtls_session_inactivity_timeout:86400000}")
     private long dtlsSessionInactivityTimeout;
 
-    @Value("${transport.coap.dtls.x509.dtls_session_report_timeout:1800000}")
+    @Value("${coap.dtls.x509.dtls_session_report_timeout:1800000}")
     private long dtlsSessionReportTimeout;
 
-    @Autowired
+    @Autowired(required = false)
     private TransportService transportService;
 
-    @Autowired
+    @Autowired(required = false)
     private TbServiceInfoProvider serviceInfoProvider;
 
-    public DtlsConnectorConfig dtlsConnectorConfig() throws UnknownHostException {
-        Optional<SecurityMode> securityModeOpt = SecurityMode.parse(mode);
-        if (securityModeOpt.isEmpty()) {
-            log.warn("Incorrect configuration of securityMode {}", mode);
-            throw new RuntimeException("Failed to parse mode property: " + mode + "!");
-        } else {
-            DtlsConnectorConfig.Builder configBuilder = new DtlsConnectorConfig.Builder();
-            configBuilder.setAddress(getInetSocketAddress());
-            String keyStoreFilePath = Resources.getResource(keyStoreFile).getPath();
-            SslContextUtil.Credentials serverCredentials = loadServerCredentials(keyStoreFilePath);
-            SecurityMode securityMode = securityModeOpt.get();
-            if (securityMode.equals(SecurityMode.NO_AUTH)) {
-                configBuilder.setClientAuthenticationRequired(false);
-                configBuilder.setServerOnly(true);
+    public DtlsConnectorConfig dtlsConnectorConfig(Configuration configuration) throws UnknownHostException {
+        DtlsConnectorConfig.Builder configBuilder = new DtlsConnectorConfig.Builder(configuration);
+        configBuilder.setAddress(getInetSocketAddress());
+        SslCredentials sslCredentials = this.coapDtlsCredentialsConfig.getCredentials();
+        SslContextUtil.Credentials serverCredentials =
+                new SslContextUtil.Credentials(sslCredentials.getPrivateKey(), null, sslCredentials.getCertificateChain());
+        configBuilder.set(DTLS_CLIENT_AUTHENTICATION_MODE, WANTED);
+        configBuilder.set(DTLS_RETRANSMISSION_TIMEOUT, dtlsRetransmissionTimeout, MILLISECONDS);
+        configBuilder.set(DTLS_ROLE, SERVER_ONLY);
+        if (cIdLength != null) {
+            configBuilder.set(DTLS_CONNECTION_ID_LENGTH, cIdLength);
+            if (cIdLength > 4) {
+                configBuilder.set(DTLS_CONNECTION_ID_NODE_ID, 0);
             } else {
-                configBuilder.setAdvancedCertificateVerifier(
-                        new TbCoapDtlsCertificateVerifier(
-                                transportService,
-                                serviceInfoProvider,
-                                dtlsSessionInactivityTimeout,
-                                dtlsSessionReportTimeout,
-                                skipValidityCheckForClientCert
-                        )
-                );
+                configBuilder.set(DTLS_CONNECTION_ID_NODE_ID, null);
             }
-            configBuilder.setIdentity(serverCredentials.getPrivateKey(), serverCredentials.getCertificateChain(),
-                    Collections.singletonList(CertificateType.X_509));
-            return configBuilder.build();
         }
-    }
-
-    private SslContextUtil.Credentials loadServerCredentials(String keyStoreFilePath) {
-        try {
-            return SslContextUtil.loadCredentials(keyStoreFilePath, keyAlias, keyStorePassword.toCharArray(),
-                    keyPassword.toCharArray());
-        } catch (GeneralSecurityException | IOException e) {
-            throw new RuntimeException("Failed to load serverCredentials due to: ", e);
+        if (maxTransmissionUnit > 0) {
+            configBuilder.set(DTLS_MAX_TRANSMISSION_UNIT, maxTransmissionUnit);
         }
-    }
-
-    private void loadTrustedCertificates(DtlsConnectorConfig.Builder config, String keyStoreFilePath) {
-        StaticNewAdvancedCertificateVerifier.Builder trustBuilder = StaticNewAdvancedCertificateVerifier.builder();
-        try {
-            Certificate[] trustedCertificates = SslContextUtil.loadTrustedCertificates(
-                    keyStoreFilePath, keyAlias,
-                    keyStorePassword.toCharArray());
-            trustBuilder.setTrustedCertificates(trustedCertificates);
-            if (trustBuilder.hasTrusts()) {
-                config.setAdvancedCertificateVerifier(trustBuilder.build());
+        if (maxFragmentLength > 0) {
+            Length length = fromLength(maxFragmentLength);
+            if (length != null) {
+                configBuilder.set(DTLS_MAX_FRAGMENT_LENGTH, length);
             }
-        } catch (GeneralSecurityException | IOException e) {
-            throw new RuntimeException("Failed to load trusted certificates due to: ", e);
         }
+        configBuilder.setAdvancedCertificateVerifier(
+                new TbCoapDtlsCertificateVerifier(
+                        transportService,
+                        serviceInfoProvider,
+                        dtlsSessionInactivityTimeout,
+                        dtlsSessionReportTimeout,
+                        skipValidityCheckForClientCert
+                )
+        );
+        configBuilder.setCertificateIdentityProvider(new SingleCertificateProvider(serverCredentials.getPrivateKey(), serverCredentials.getCertificateChain(),
+                Collections.singletonList(CertificateType.X_509)));
+        return configBuilder.build();
     }
 
     private InetSocketAddress getInetSocketAddress() throws UnknownHostException {
@@ -139,23 +145,14 @@ public class TbCoapDtlsSettings {
         return new InetSocketAddress(addr, port);
     }
 
-    private enum SecurityMode {
-        X509,
-        NO_AUTH;
 
-        static Optional<SecurityMode> parse(String name) {
-            SecurityMode mode = null;
-            if (name != null) {
-                for (SecurityMode securityMode : SecurityMode.values()) {
-                    if (securityMode.name().equalsIgnoreCase(name)) {
-                        mode = securityMode;
-                        break;
-                    }
-                }
+    private static Length fromLength(int length) {
+        for (Length l : Length.values()) {
+            if (l.length() == length) {
+                return l;
             }
-            return Optional.ofNullable(mode);
         }
-
+        return null;
     }
-
 }
+

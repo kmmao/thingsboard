@@ -1,5 +1,5 @@
 /**
- * Copyright © 2016-2021 The Thingsboard Authors
+ * Copyright © 2016-2025 The Thingsboard Authors
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -16,25 +16,23 @@
 package org.thingsboard.server.dao.model.sql;
 
 import com.fasterxml.jackson.databind.JsonNode;
+import jakarta.persistence.Column;
+import jakarta.persistence.Convert;
+import jakarta.persistence.Entity;
+import jakarta.persistence.EnumType;
+import jakarta.persistence.Enumerated;
+import jakarta.persistence.Table;
 import lombok.Data;
 import lombok.EqualsAndHashCode;
-import org.hibernate.annotations.Type;
-import org.hibernate.annotations.TypeDef;
 import org.thingsboard.server.common.data.User;
 import org.thingsboard.server.common.data.id.CustomerId;
 import org.thingsboard.server.common.data.id.TenantId;
 import org.thingsboard.server.common.data.id.UserId;
 import org.thingsboard.server.common.data.security.Authority;
-import org.thingsboard.server.dao.model.BaseSqlEntity;
+import org.thingsboard.server.dao.model.BaseVersionedEntity;
 import org.thingsboard.server.dao.model.ModelConstants;
-import org.thingsboard.server.dao.model.SearchTextEntity;
-import org.thingsboard.server.dao.util.mapping.JsonStringType;
+import org.thingsboard.server.dao.util.mapping.JsonConverter;
 
-import javax.persistence.Column;
-import javax.persistence.Entity;
-import javax.persistence.EnumType;
-import javax.persistence.Enumerated;
-import javax.persistence.Table;
 import java.util.UUID;
 
 /**
@@ -43,9 +41,8 @@ import java.util.UUID;
 @Data
 @EqualsAndHashCode(callSuper = true)
 @Entity
-@TypeDef(name = "json", typeClass = JsonStringType.class)
-@Table(name = ModelConstants.USER_PG_HIBERNATE_COLUMN_FAMILY_NAME)
-public class UserEntity extends BaseSqlEntity<User> implements SearchTextEntity<User> {
+@Table(name = ModelConstants.USER_PG_HIBERNATE_TABLE_NAME)
+public class UserEntity extends BaseVersionedEntity<User> {
 
     @Column(name = ModelConstants.USER_TENANT_ID_PROPERTY)
     private UUID tenantId;
@@ -60,16 +57,16 @@ public class UserEntity extends BaseSqlEntity<User> implements SearchTextEntity<
     @Column(name = ModelConstants.USER_EMAIL_PROPERTY, unique = true)
     private String email;
 
-    @Column(name = ModelConstants.SEARCH_TEXT_PROPERTY)
-    private String searchText;
-
     @Column(name = ModelConstants.USER_FIRST_NAME_PROPERTY)
     private String firstName;
 
     @Column(name = ModelConstants.USER_LAST_NAME_PROPERTY)
     private String lastName;
 
-    @Type(type = "json")
+    @Column(name = ModelConstants.PHONE_PROPERTY)
+    private String phone;
+
+    @Convert(converter = JsonConverter.class)
     @Column(name = ModelConstants.USER_ADDITIONAL_INFO_PROPERTY)
     private JsonNode additionalInfo;
 
@@ -77,10 +74,7 @@ public class UserEntity extends BaseSqlEntity<User> implements SearchTextEntity<
     }
 
     public UserEntity(User user) {
-        if (user.getId() != null) {
-            this.setUuid(user.getId().getId());
-        }
-        this.setCreatedTime(user.getCreatedTime());
+        super(user);
         this.authority = user.getAuthority();
         if (user.getTenantId() != null) {
             this.tenantId = user.getTenantId().getId();
@@ -91,26 +85,18 @@ public class UserEntity extends BaseSqlEntity<User> implements SearchTextEntity<
         this.email = user.getEmail();
         this.firstName = user.getFirstName();
         this.lastName = user.getLastName();
+        this.phone = user.getPhone();
         this.additionalInfo = user.getAdditionalInfo();
-    }
-
-    @Override
-    public String getSearchTextSource() {
-        return email;
-    }
-
-    @Override
-    public void setSearchText(String searchText) {
-        this.searchText = searchText;
     }
 
     @Override
     public User toData() {
         User user = new User(new UserId(this.getUuid()));
         user.setCreatedTime(createdTime);
+        user.setVersion(version);
         user.setAuthority(authority);
         if (tenantId != null) {
-            user.setTenantId(new TenantId(tenantId));
+            user.setTenantId(TenantId.fromUUID(tenantId));
         }
         if (customerId != null) {
             user.setCustomerId(new CustomerId(customerId));
@@ -118,6 +104,7 @@ public class UserEntity extends BaseSqlEntity<User> implements SearchTextEntity<
         user.setEmail(email);
         user.setFirstName(firstName);
         user.setLastName(lastName);
+        user.setPhone(phone);
         user.setAdditionalInfo(additionalInfo);
         return user;
     }

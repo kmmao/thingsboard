@@ -1,5 +1,5 @@
 /**
- * Copyright © 2016-2021 The Thingsboard Authors
+ * Copyright © 2016-2025 The Thingsboard Authors
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -15,63 +15,54 @@
  */
 package org.thingsboard.server.cache;
 
-import org.apache.commons.lang3.StringUtils;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnMissingBean;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
 import org.springframework.context.annotation.Configuration;
 import org.springframework.data.redis.connection.RedisClusterConfiguration;
-import org.springframework.data.redis.connection.RedisNode;
+import org.springframework.data.redis.connection.jedis.JedisClientConfiguration;
 import org.springframework.data.redis.connection.jedis.JedisConnectionFactory;
 
-import java.util.ArrayList;
-import java.util.Collections;
-import java.util.List;
-
 @Configuration
-@ConditionalOnMissingBean(CaffeineCacheConfiguration.class)
+@ConditionalOnMissingBean(TbCaffeineCacheConfiguration.class)
 @ConditionalOnProperty(prefix = "redis.connection", value = "type", havingValue = "cluster")
 public class TBRedisClusterConfiguration extends TBRedisCacheConfiguration {
 
-    private static final String COMMA = ",";
-    private static final String COLON = ":";
-
-    @Value("${redis.cluster.nodes}")
+    @Value("${redis.cluster.nodes:}")
     private String clusterNodes;
 
-    @Value("${redis.cluster.max-redirects}")
+    @Value("${redis.cluster.max-redirects:12}")
     private Integer maxRedirects;
 
-    @Value("${redis.cluster.useDefaultPoolConfig}")
+    @Value("${redis.cluster.useDefaultPoolConfig:true}")
     private boolean useDefaultPoolConfig;
 
-    @Value("${redis.password}")
+    @Value("${redis.password:}")
     private String password;
+
+    @Value("${redis.ssl.enabled:false}")
+    private boolean useSsl;
 
     public JedisConnectionFactory loadFactory() {
         RedisClusterConfiguration clusterConfiguration = new RedisClusterConfiguration();
         clusterConfiguration.setClusterNodes(getNodes(clusterNodes));
         clusterConfiguration.setMaxRedirects(maxRedirects);
         clusterConfiguration.setPassword(password);
-        if (useDefaultPoolConfig) {
-            return new JedisConnectionFactory(clusterConfiguration);
-        } else {
-            return new JedisConnectionFactory(clusterConfiguration, buildPoolConfig());
-        }
+        return new JedisConnectionFactory(clusterConfiguration, buildClientConfig());
     }
 
-    private List<RedisNode> getNodes(String nodes) {
-        List<RedisNode> result;
-        if (StringUtils.isBlank(nodes)) {
-            result = Collections.emptyList();
-        } else {
-            result = new ArrayList<>();
-            for (String hostPort : nodes.split(COMMA)) {
-                String host = hostPort.split(COLON)[0];
-                Integer port = Integer.valueOf(hostPort.split(COLON)[1]);
-                result.add(new RedisNode(host, port));
-            }
+    private JedisClientConfiguration buildClientConfig() {
+        JedisClientConfiguration.JedisClientConfigurationBuilder jedisClientConfigurationBuilder = JedisClientConfiguration.builder();
+        if (!useDefaultPoolConfig) {
+            jedisClientConfigurationBuilder
+                    .usePooling()
+                    .poolConfig(buildPoolConfig());
         }
-        return result;
+        if (useSsl) {
+            jedisClientConfigurationBuilder
+                    .useSsl()
+                    .sslSocketFactory(createSslSocketFactory());
+        }
+        return jedisClientConfigurationBuilder.build();
     }
 }

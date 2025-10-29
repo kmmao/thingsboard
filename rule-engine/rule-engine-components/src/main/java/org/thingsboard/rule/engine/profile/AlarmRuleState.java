@@ -1,5 +1,5 @@
 /**
- * Copyright © 2016-2021 The Thingsboard Authors
+ * Copyright © 2016-2025 The Thingsboard Authors
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -18,13 +18,16 @@ package org.thingsboard.rule.engine.profile;
 import lombok.Data;
 import lombok.extern.slf4j.Slf4j;
 import org.thingsboard.rule.engine.profile.state.PersistedAlarmRuleState;
+import org.thingsboard.server.common.adaptor.JsonConverter;
 import org.thingsboard.server.common.data.alarm.AlarmSeverity;
 import org.thingsboard.server.common.data.device.profile.AlarmCondition;
 import org.thingsboard.server.common.data.device.profile.AlarmConditionFilter;
 import org.thingsboard.server.common.data.device.profile.AlarmConditionFilterKey;
 import org.thingsboard.server.common.data.device.profile.AlarmConditionKeyType;
 import org.thingsboard.server.common.data.device.profile.AlarmConditionSpec;
+import org.thingsboard.server.common.data.device.profile.AlarmConditionSpecType;
 import org.thingsboard.server.common.data.device.profile.AlarmRule;
+import org.thingsboard.server.common.data.device.profile.AlarmSchedule;
 import org.thingsboard.server.common.data.device.profile.CustomTimeSchedule;
 import org.thingsboard.server.common.data.device.profile.CustomTimeScheduleItem;
 import org.thingsboard.server.common.data.device.profile.DurationAlarmConditionSpec;
@@ -33,6 +36,7 @@ import org.thingsboard.server.common.data.device.profile.SimpleAlarmConditionSpe
 import org.thingsboard.server.common.data.device.profile.SpecificTimeSchedule;
 import org.thingsboard.server.common.data.query.BooleanFilterPredicate;
 import org.thingsboard.server.common.data.query.ComplexFilterPredicate;
+import org.thingsboard.server.common.data.query.DynamicValue;
 import org.thingsboard.server.common.data.query.FilterPredicateValue;
 import org.thingsboard.server.common.data.query.KeyFilterPredicate;
 import org.thingsboard.server.common.data.query.NumericFilterPredicate;
@@ -43,7 +47,11 @@ import java.time.Instant;
 import java.time.ZoneId;
 import java.time.ZonedDateTime;
 import java.util.Set;
+import java.util.concurrent.TimeUnit;
 import java.util.function.Function;
+
+import static org.thingsboard.server.common.data.StringUtils.equalsAny;
+import static org.thingsboard.server.common.data.StringUtils.splitByCommaWithoutQuotes;
 
 @Data
 @Slf4j
@@ -52,8 +60,6 @@ class AlarmRuleState {
     private final AlarmSeverity severity;
     private final AlarmRule alarmRule;
     private final AlarmConditionSpec spec;
-    private final long requiredDurationInMs;
-    private final long requiredRepeats;
     private final Set<AlarmConditionFilterKey> entityKeys;
     private PersistedAlarmRuleState state;
     private boolean updateFlag;
@@ -69,20 +75,6 @@ class AlarmRuleState {
             this.state = new PersistedAlarmRuleState(0L, 0L, 0L);
         }
         this.spec = getSpec(alarmRule);
-        long requiredDurationInMs = 0;
-        long requiredRepeats = 0;
-        switch (spec.getType()) {
-            case DURATION:
-                DurationAlarmConditionSpec duration = (DurationAlarmConditionSpec) spec;
-                requiredDurationInMs = duration.getUnit().toMillis(duration.getValue());
-                break;
-            case REPEATING:
-                RepeatingAlarmConditionSpec repeating = (RepeatingAlarmConditionSpec) spec;
-                requiredRepeats = repeating.getCount();
-                break;
-        }
-        this.requiredDurationInMs = requiredDurationInMs;
-        this.requiredRepeats = requiredRepeats;
         this.dynamicPredicateValueCtx = dynamicPredicateValueCtx;
     }
 
@@ -96,12 +88,6 @@ class AlarmRuleState {
     }
 
     public boolean validateAttrUpdate(Set<AlarmConditionFilterKey> changedKeys) {
-        //If the attribute was updated, but no new telemetry arrived - we ignore this until new telemetry is there.
-        for (AlarmConditionFilterKey key : entityKeys) {
-            if (key.getType().equals(AlarmConditionKeyType.TIME_SERIES)) {
-                return false;
-            }
-        }
         for (AlarmConditionFilterKey key : changedKeys) {
             if (entityKeys.contains(key)) {
                 return true;
@@ -128,7 +114,7 @@ class AlarmRuleState {
     }
 
     public AlarmEvalResult eval(DataSnapshot data) {
-        boolean active = isActive(data.getTs());
+        boolean active = isActive(data, data.getTs());
         switch (spec.getType()) {
             case SIMPLE:
                 return (active && eval(alarmRule.getCondition(), data)) ? AlarmEvalResult.TRUE : AlarmEvalResult.FALSE;
@@ -141,7 +127,7 @@ class AlarmRuleState {
         }
     }
 
-    private boolean isActive(long eventTs) {
+    private boolean isActive(DataSnapshot data, long eventTs) {
         if (eventTs == 0L) {
             eventTs = System.currentTimeMillis();
         }
@@ -152,12 +138,26 @@ class AlarmRuleState {
             case ANY_TIME:
                 return true;
             case SPECIFIC_TIME:
-                return isActiveSpecific((SpecificTimeSchedule) alarmRule.getSchedule(), eventTs);
+                return isActiveSpecific((SpecificTimeSchedule) getSchedule(data, alarmRule), eventTs);
             case CUSTOM:
-                return isActiveCustom((CustomTimeSchedule) alarmRule.getSchedule(), eventTs);
+                return isActiveCustom((CustomTimeSchedule) getSchedule(data, alarmRule), eventTs);
             default:
                 throw new RuntimeException("Unsupported schedule type: " + alarmRule.getSchedule().getType());
         }
+    }
+
+    private AlarmSchedule getSchedule(DataSnapshot data, AlarmRule alarmRule) {
+        AlarmSchedule schedule = alarmRule.getSchedule();
+        EntityKeyValue dynamicValue = getDynamicPredicateValue(data, schedule.getDynamicValue());
+
+        if (dynamicValue != null) {
+            try {
+                return JsonConverter.parse(dynamicValue.getJsonValue(), alarmRule.getSchedule().getClass());
+            } catch (Exception e) {
+                log.trace("Failed to parse AlarmSchedule from dynamicValue: {}", dynamicValue.getJsonValue(), e);
+            }
+        }
+        return schedule;
     }
 
     private boolean isActiveSpecific(SpecificTimeSchedule schedule, long eventTs) {
@@ -169,7 +169,13 @@ class AlarmRuleState {
                 return false;
             }
         }
-        return isActive(eventTs, zoneId, zdt, schedule.getStartsOn(), schedule.getEndsOn());
+        long endsOn = schedule.getEndsOn();
+        if (endsOn == 0) {
+            // 24 hours in milliseconds
+            endsOn = 86400000;
+        }
+
+        return isActive(eventTs, zoneId, zdt, schedule.getStartsOn(), endsOn);
     }
 
     private boolean isActiveCustom(CustomTimeSchedule schedule, long eventTs) {
@@ -179,7 +185,12 @@ class AlarmRuleState {
         for (CustomTimeScheduleItem item : schedule.getItems()) {
             if (item.getDayOfWeek() == dayOfWeek) {
                 if (item.isEnabled()) {
-                    return isActive(eventTs, zoneId, zdt, item.getStartsOn(), item.getEndsOn());
+                    long endsOn = item.getEndsOn();
+                    if (endsOn == 0) {
+                        // 24 hours in milliseconds
+                        endsOn = 86400000;
+                    }
+                    return isActive(eventTs, zoneId, zdt, item.getStartsOn(), endsOn);
                 } else {
                     return false;
                 }
@@ -211,6 +222,7 @@ class AlarmRuleState {
         if (active && eval(alarmRule.getCondition(), data)) {
             state.setEventCount(state.getEventCount() + 1);
             updateFlag = true;
+            long requiredRepeats = resolveRequiredRepeats(data);
             return state.getEventCount() >= requiredRepeats ? AlarmEvalResult.TRUE : AlarmEvalResult.NOT_YET_TRUE;
         } else {
             return AlarmEvalResult.FALSE;
@@ -230,21 +242,68 @@ class AlarmRuleState {
                 state.setDuration(0L);
                 updateFlag = true;
             }
+            long requiredDurationInMs = resolveRequiredDurationInMs(data);
             return state.getDuration() > requiredDurationInMs ? AlarmEvalResult.TRUE : AlarmEvalResult.NOT_YET_TRUE;
         } else {
             return AlarmEvalResult.FALSE;
         }
     }
 
-    public AlarmEvalResult eval(long ts) {
+    private long resolveRequiredRepeats(DataSnapshot data) {
+        long repeatingTimes = 0;
+        AlarmConditionSpec alarmConditionSpec = getSpec();
+        AlarmConditionSpecType specType = alarmConditionSpec.getType();
+        if (specType.equals(AlarmConditionSpecType.REPEATING)) {
+            RepeatingAlarmConditionSpec repeating = (RepeatingAlarmConditionSpec) spec;
+
+            repeatingTimes = resolveDynamicValue(data, repeating.getPredicate());
+        }
+        return repeatingTimes;
+    }
+
+    private long resolveRequiredDurationInMs(DataSnapshot data) {
+        long durationTimeInMs = 0;
+        AlarmConditionSpec alarmConditionSpec = getSpec();
+        AlarmConditionSpecType specType = alarmConditionSpec.getType();
+        if (specType.equals(AlarmConditionSpecType.DURATION)) {
+            DurationAlarmConditionSpec duration = (DurationAlarmConditionSpec) spec;
+            TimeUnit timeUnit = duration.getUnit();
+
+            durationTimeInMs = timeUnit.toMillis(resolveDynamicValue(data, duration.getPredicate()));
+        }
+        return durationTimeInMs;
+    }
+
+    private Long resolveDynamicValue(DataSnapshot data, FilterPredicateValue<? extends Number> predicate) {
+        DynamicValue<?> dynamicValue = predicate.getDynamicValue();
+        Long defaultValue = predicate.getDefaultValue().longValue();
+        if (dynamicValue == null || dynamicValue.getSourceAttribute() == null) {
+            return defaultValue;
+        }
+
+        EntityKeyValue keyValue = getDynamicPredicateValue(data, dynamicValue);
+        if (keyValue == null) {
+            return defaultValue;
+        }
+
+        var longValue = getLongValue(keyValue);
+        if (longValue == null) {
+            String sourceAttribute = dynamicValue.getSourceAttribute();
+            throw new NumericParseException(String.format("Could not convert attribute '%s' with value '%s' to numeric value!", sourceAttribute, getStrValue(keyValue)));
+        }
+        return longValue;
+    }
+
+    public AlarmEvalResult eval(long ts, DataSnapshot dataSnapshot) {
         switch (spec.getType()) {
             case SIMPLE:
             case REPEATING:
                 return AlarmEvalResult.NOT_YET_TRUE;
             case DURATION:
+                long requiredDurationInMs = resolveRequiredDurationInMs(dataSnapshot);
                 if (requiredDurationInMs > 0 && state.getLastEventTs() > 0 && ts > state.getLastEventTs()) {
                     long duration = state.getDuration() + (ts - state.getLastEventTs());
-                    if (isActive(ts)) {
+                    if (isActive(dataSnapshot, ts)) {
                         return duration > requiredDurationInMs ? AlarmEvalResult.TRUE : AlarmEvalResult.NOT_YET_TRUE;
                     } else {
                         return AlarmEvalResult.FALSE;
@@ -405,13 +464,17 @@ class AlarmRuleState {
                 return !val.equals(predicateValue);
             case NOT_CONTAINS:
                 return !val.contains(predicateValue);
+            case IN:
+                return equalsAny(val, splitByCommaWithoutQuotes(predicateValue));
+            case NOT_IN:
+                return !equalsAny(val, splitByCommaWithoutQuotes(predicateValue));
             default:
                 throw new RuntimeException("Operation not supported: " + predicate.getOperation());
         }
     }
 
     private <T> T getPredicateValue(DataSnapshot data, FilterPredicateValue<T> value, AlarmConditionFilter filter, Function<EntityKeyValue, T> transformFunction) {
-        EntityKeyValue ekv = getDynamicPredicateValue(data, value);
+        EntityKeyValue ekv = getDynamicPredicateValue(data, value.getDynamicValue());
         if (ekv != null) {
             T result = transformFunction.apply(ekv);
             if (result != null) {
@@ -425,22 +488,22 @@ class AlarmRuleState {
         }
     }
 
-    private <T> EntityKeyValue getDynamicPredicateValue(DataSnapshot data, FilterPredicateValue<T> value) {
+    private <T> EntityKeyValue getDynamicPredicateValue(DataSnapshot data, DynamicValue<T> value) {
         EntityKeyValue ekv = null;
-        if (value.getDynamicValue() != null) {
-            switch (value.getDynamicValue().getSourceType()) {
+        if (value != null) {
+            switch (value.getSourceType()) {
                 case CURRENT_DEVICE:
-                    ekv = data.getValue(new AlarmConditionFilterKey(AlarmConditionKeyType.ATTRIBUTE, value.getDynamicValue().getSourceAttribute()));
-                    if (ekv != null || !value.getDynamicValue().isInherit()) {
+                    ekv = data.getValue(new AlarmConditionFilterKey(AlarmConditionKeyType.ATTRIBUTE, value.getSourceAttribute()));
+                    if (ekv != null || !value.isInherit()) {
                         break;
                     }
                 case CURRENT_CUSTOMER:
-                    ekv = dynamicPredicateValueCtx.getCustomerValue(value.getDynamicValue().getSourceAttribute());
-                    if (ekv != null || !value.getDynamicValue().isInherit()) {
+                    ekv = dynamicPredicateValueCtx.getCustomerValue(value.getSourceAttribute());
+                    if (ekv != null || !value.isInherit()) {
                         break;
                     }
                 case CURRENT_TENANT:
-                    ekv = dynamicPredicateValueCtx.getTenantValue(value.getDynamicValue().getSourceAttribute());
+                    ekv = dynamicPredicateValueCtx.getTenantValue(value.getSourceAttribute());
             }
         }
         return ekv;
@@ -513,4 +576,28 @@ class AlarmRuleState {
         }
     }
 
+    private static Long getLongValue(EntityKeyValue ekv) {
+        switch (ekv.getDataType()) {
+            case LONG:
+                return ekv.getLngValue();
+            case DOUBLE:
+                return ekv.getDblValue() != null ? ekv.getDblValue().longValue() : null;
+            case BOOLEAN:
+                return ekv.getBoolValue() != null ? (ekv.getBoolValue() ? 1 : 0L) : null;
+            case STRING:
+                try {
+                    return Long.parseLong(ekv.getStrValue());
+                } catch (RuntimeException e) {
+                    return null;
+                }
+            case JSON:
+                try {
+                    return Long.parseLong(ekv.getJsonValue());
+                } catch (RuntimeException e) {
+                    return null;
+                }
+            default:
+                return null;
+        }
+    }
 }

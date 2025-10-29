@@ -1,5 +1,5 @@
 ///
-/// Copyright © 2016-2021 The Thingsboard Authors
+/// Copyright © 2016-2025 The Thingsboard Authors
 ///
 /// Licensed under the Apache License, Version 2.0 (the "License");
 /// you may not use this file except in compliance with the License.
@@ -24,7 +24,7 @@ import { EdgeInfo } from '@shared/models/edge.models';
 @Component({
   selector: 'tb-edge-table-header',
   templateUrl: './edge-table-header.component.html',
-  styleUrls: ['./edge-table-header.component.scss']
+  styleUrls: []
 })
 export class EdgeTableHeaderComponent extends EntityTableHeaderComponent<EdgeInfo> {
 
@@ -36,7 +36,7 @@ export class EdgeTableHeaderComponent extends EntityTableHeaderComponent<EdgeInf
 
   edgeTypeChanged(edgeType: string) {
     this.entitiesTableConfig.componentsData.edgeType = edgeType;
-    this.entitiesTableConfig.table.resetSortAndFilter(true);
+    this.entitiesTableConfig.getTable().resetSortAndFilter(true);
   }
 
 }

@@ -1,5 +1,5 @@
 ///
-/// Copyright © 2016-2021 The Thingsboard Authors
+/// Copyright © 2016-2025 The Thingsboard Authors
 ///
 /// Licensed under the Apache License, Version 2.0 (the "License");
 /// you may not use this file except in compliance with the License.
@@ -14,100 +14,62 @@
 /// limitations under the License.
 ///
 
-import {
-  Compiler,
-  Component,
-  ComponentFactory,
-  Injectable,
-  Injector,
-  NgModule,
-  NgModuleRef,
-  OnDestroy,
-  Type
-} from '@angular/core';
-import { Observable, ReplaySubject } from 'rxjs';
+import { Component, Injectable, Type, ɵComponentDef, ɵNG_COMP_DEF } from '@angular/core';
+import { from, Observable, shareReplay } from 'rxjs';
 import { CommonModule } from '@angular/common';
-
-@NgModule()
-export abstract class DynamicComponentModule implements OnDestroy {
-
-  ngOnDestroy(): void {
-  }
-
-}
-
-interface DynamicComponentModuleData {
-  moduleRef: NgModuleRef<DynamicComponentModule>;
-  moduleType: Type<DynamicComponentModule>;
-}
+import { map } from 'rxjs/operators';
+import { guid } from '@core/utils';
 
 @Injectable({
     providedIn: 'root'
 })
 export class DynamicComponentFactoryService {
 
-  private dynamicComponentModulesMap = new Map<ComponentFactory<any>, DynamicComponentModuleData>();
+  private compiler$: Observable<any> = from(import('@angular/compiler')).pipe(
+    shareReplay({refCount: true, bufferSize: 1})
+  );
 
-  constructor(private compiler: Compiler,
-              private injector: Injector) {
+  constructor() {
   }
 
-  public createDynamicComponentFactory<T>(
+  public createDynamicComponent<T>(
                      componentType: Type<T>,
                      template: string,
-                     modules?: Type<any>[]): Observable<ComponentFactory<T>> {
-    const dymamicComponentFactorySubject = new ReplaySubject<ComponentFactory<T>>();
-    import('@angular/compiler').then(
-      () => {
-        const comp = this.createDynamicComponent(componentType, template);
-        let moduleImports: Type<any>[] = [CommonModule];
-        if (modules) {
-          moduleImports = [...moduleImports, ...modules];
+                     imports?: Type<any>[],
+                     preserveWhitespaces?: boolean,
+                     styles?: string[]): Observable<Type<T>> {
+    return this.compiler$.pipe(
+      map(() => {
+        let componentImports: Type<any>[] = [CommonModule];
+        if (imports) {
+          componentImports = [...componentImports, ...imports];
         }
-        // noinspection AngularInvalidImportedOrDeclaredSymbol
-        const dynamicComponentInstanceModule = NgModule({
-          declarations: [comp],
-          imports: moduleImports
-        })(class DynamicComponentInstanceModule extends DynamicComponentModule {});
-        try {
-          this.compiler.compileModuleAsync(dynamicComponentInstanceModule).then(
-            (module) => {
-              const moduleRef = module.create(this.injector);
-              const factory = moduleRef.componentFactoryResolver.resolveComponentFactory(comp);
-              this.dynamicComponentModulesMap.set(factory, {
-                moduleRef,
-                moduleType: module.moduleType
-              });
-              dymamicComponentFactorySubject.next(factory);
-              dymamicComponentFactorySubject.complete();
-            }
-          ).catch(
-            (e) => {
-              dymamicComponentFactorySubject.error(e);
-            }
-          );
-        } catch (e) {
-          dymamicComponentFactorySubject.error(e);
-        }
-      }
+        const comp = this.createAndCompileDynamicComponent(componentType, template, componentImports, preserveWhitespaces, styles);
+        return comp.type;
+      })
     );
-    return dymamicComponentFactorySubject.asObservable();
   }
 
-  public destroyDynamicComponentFactory<T>(factory: ComponentFactory<T>) {
-    const moduleData = this.dynamicComponentModulesMap.get(factory);
-    if (moduleData) {
-      moduleData.moduleRef.destroy();
-      this.compiler.clearCacheFor(moduleData.moduleType);
-      this.dynamicComponentModulesMap.delete(factory);
-    }
+  public destroyDynamicComponent<T>(_componentType: Type<T>) {
   }
 
-  private createDynamicComponent<T>(componentType: Type<T>, template: string): Type<T> {
+  public getComponentDef<T>(componentType: Type<T>): ɵComponentDef<T> {
+    return componentType[ɵNG_COMP_DEF];
+  }
+
+  private createAndCompileDynamicComponent<T>(componentType: Type<T>, template: string, imports: Type<any>[],
+                                              preserveWhitespaces?: boolean, styles?: string[]): ɵComponentDef<T> {
     // noinspection AngularMissingOrInvalidDeclarationInModule
-    return Component({
-      template
+    const comp = Component({
+      template,
+      imports,
+      preserveWhitespaces,
+      styles,
+      standalone: true,
+      selector: 'tb-dynamic-component#' + guid()
     })(componentType);
+    // Trigger component compilation
+    return comp[ɵNG_COMP_DEF];
   }
 
 }

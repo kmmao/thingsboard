@@ -1,5 +1,5 @@
 ///
-/// Copyright © 2016-2021 The Thingsboard Authors
+/// Copyright © 2016-2025 The Thingsboard Authors
 ///
 /// Licensed under the Apache License, Version 2.0 (the "License");
 /// you may not use this file except in compliance with the License.
@@ -19,10 +19,10 @@ import { AuthService } from '@core/auth/auth.service';
 import { Store } from '@ngrx/store';
 import { AppState } from '@core/core.state';
 import { PageComponent } from '@shared/components/page.component';
-import { FormBuilder } from '@angular/forms';
+import { UntypedFormBuilder } from '@angular/forms';
 import { ActionNotificationShow } from '@core/notification/notification.actions';
 import { TranslateService } from '@ngx-translate/core';
-import { ActivatedRoute } from '@angular/router';
+import { ActivatedRoute, Router } from '@angular/router';
 import { Subscription } from 'rxjs';
 
 @Component({
@@ -44,9 +44,10 @@ export class ResetPasswordComponent extends PageComponent implements OnInit, OnD
 
   constructor(protected store: Store<AppState>,
               private route: ActivatedRoute,
+              private router: Router,
               private authService: AuthService,
               private translate: TranslateService,
-              public fb: FormBuilder) {
+              public fb: UntypedFormBuilder) {
     super(store);
   }
 
@@ -71,7 +72,9 @@ export class ResetPasswordComponent extends PageComponent implements OnInit, OnD
     } else {
       this.authService.resetPassword(
         this.resetToken,
-        this.resetPassword.get('newPassword').value).subscribe();
+        this.resetPassword.get('newPassword').value).subscribe(
+        () => this.router.navigateByUrl('login')
+      );
     }
   }
 }

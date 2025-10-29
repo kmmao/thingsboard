@@ -1,5 +1,5 @@
 /**
- * Copyright © 2016-2021 The Thingsboard Authors
+ * Copyright © 2016-2025 The Thingsboard Authors
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -16,35 +16,39 @@
 package org.thingsboard.server.dao.model.sql;
 
 import com.fasterxml.jackson.databind.JsonNode;
+import jakarta.persistence.Column;
+import jakarta.persistence.Convert;
+import jakarta.persistence.Entity;
+import jakarta.persistence.Table;
 import lombok.Data;
 import lombok.EqualsAndHashCode;
-import org.hibernate.annotations.Type;
-import org.hibernate.annotations.TypeDef;
 import org.thingsboard.server.common.data.AdminSettings;
 import org.thingsboard.server.common.data.id.AdminSettingsId;
+import org.thingsboard.server.common.data.id.TenantId;
 import org.thingsboard.server.dao.model.BaseEntity;
 import org.thingsboard.server.dao.model.BaseSqlEntity;
-import org.thingsboard.server.dao.util.mapping.JsonStringType;
+import org.thingsboard.server.dao.model.ModelConstants;
+import org.thingsboard.server.dao.util.mapping.JsonConverter;
 
-import javax.persistence.Column;
-import javax.persistence.Entity;
-import javax.persistence.Table;
+import java.util.UUID;
 
-import static org.thingsboard.server.dao.model.ModelConstants.ADMIN_SETTINGS_COLUMN_FAMILY_NAME;
 import static org.thingsboard.server.dao.model.ModelConstants.ADMIN_SETTINGS_JSON_VALUE_PROPERTY;
 import static org.thingsboard.server.dao.model.ModelConstants.ADMIN_SETTINGS_KEY_PROPERTY;
+import static org.thingsboard.server.dao.model.ModelConstants.ADMIN_SETTINGS_TABLE_NAME;
 
 @Data
 @EqualsAndHashCode(callSuper = true)
 @Entity
-@TypeDef(name = "json", typeClass = JsonStringType.class)
-@Table(name = ADMIN_SETTINGS_COLUMN_FAMILY_NAME)
+@Table(name = ADMIN_SETTINGS_TABLE_NAME)
 public final class AdminSettingsEntity extends BaseSqlEntity<AdminSettings> implements BaseEntity<AdminSettings> {
+
+    @Column(name = ModelConstants.ADMIN_SETTINGS_TENANT_ID_PROPERTY)
+    private UUID tenantId;
 
     @Column(name = ADMIN_SETTINGS_KEY_PROPERTY)
     private String key;
 
-    @Type(type = "json")
+    @Convert(converter = JsonConverter.class)
     @Column(name = ADMIN_SETTINGS_JSON_VALUE_PROPERTY)
     private JsonNode jsonValue;
 
@@ -57,6 +61,7 @@ public final class AdminSettingsEntity extends BaseSqlEntity<AdminSettings> impl
             this.setUuid(adminSettings.getId().getId());
         }
         this.setCreatedTime(adminSettings.getCreatedTime());
+        this.tenantId = adminSettings.getTenantId().getId();
         this.key = adminSettings.getKey();
         this.jsonValue = adminSettings.getJsonValue();
     }
@@ -65,6 +70,7 @@ public final class AdminSettingsEntity extends BaseSqlEntity<AdminSettings> impl
     public AdminSettings toData() {
         AdminSettings adminSettings = new AdminSettings(new AdminSettingsId(id));
         adminSettings.setCreatedTime(createdTime);
+        adminSettings.setTenantId(TenantId.fromUUID(tenantId));
         adminSettings.setKey(key);
         adminSettings.setJsonValue(jsonValue);
         return adminSettings;

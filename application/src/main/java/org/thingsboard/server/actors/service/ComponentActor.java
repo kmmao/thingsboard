@@ -1,5 +1,5 @@
 /**
- * Copyright © 2016-2021 The Thingsboard Authors
+ * Copyright © 2016-2025 The Thingsboard Authors
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -17,7 +17,6 @@ package org.thingsboard.server.actors.service;
 
 import lombok.extern.slf4j.Slf4j;
 import org.thingsboard.server.actors.ActorSystemContext;
-import org.thingsboard.server.actors.TbActor;
 import org.thingsboard.server.actors.TbActorCtx;
 import org.thingsboard.server.actors.TbActorException;
 import org.thingsboard.server.actors.TbRuleNodeUpdateException;
@@ -26,8 +25,12 @@ import org.thingsboard.server.actors.stats.StatsPersistMsg;
 import org.thingsboard.server.common.data.id.EntityId;
 import org.thingsboard.server.common.data.id.TenantId;
 import org.thingsboard.server.common.data.plugin.ComponentLifecycleEvent;
+import org.thingsboard.server.common.msg.TbActorStopReason;
 import org.thingsboard.server.common.msg.plugin.ComponentLifecycleMsg;
 import org.thingsboard.server.common.msg.queue.PartitionChangeMsg;
+
+import java.util.Optional;
+import java.util.concurrent.ScheduledFuture;
 
 /**
  * @author Andrew Shvayka
@@ -41,6 +44,7 @@ public abstract class ComponentActor<T extends EntityId, P extends ComponentMsgP
     protected P processor;
     private long messagesProcessed;
     private long errorsOccurred;
+    ScheduledFuture<?> statsScheduledFuture = null;
 
     public ComponentActor(ActorSystemContext systemContext, TenantId tenantId, T id) {
         super(systemContext);
@@ -73,9 +77,9 @@ public abstract class ComponentActor<T extends EntityId, P extends ComponentMsgP
         }
     }
 
-    private void scheduleStatsPersistTick() {
+    void scheduleStatsPersistTick() {
         try {
-            processor.scheduleStatsPersistTick(ctx, systemContext.getStatisticsPersistFrequency());
+            this.statsScheduledFuture = processor.scheduleStatsPersistTick(ctx, systemContext.getStatisticsPersistFrequency());
         } catch (Exception e) {
             log.error("[{}][{}] Failed to schedule statistics store message. No statistics is going to be stored: {}", tenantId, id, e.getMessage());
             logAndPersist("onScheduleStatsPersistMsg", e);
@@ -83,13 +87,15 @@ public abstract class ComponentActor<T extends EntityId, P extends ComponentMsgP
     }
 
     @Override
-    public void destroy() {
+    public void destroy(TbActorStopReason stopReason, Throwable cause) {
         try {
             log.debug("[{}][{}][{}] Stopping processor.", tenantId, id, id.getEntityType());
             if (processor != null) {
                 processor.stop(ctx);
             }
             logLifecycleEvent(ComponentLifecycleEvent.STOPPED);
+            Optional.ofNullable(statsScheduledFuture).ifPresent(x -> x.cancel(false));
+            statsScheduledFuture = null;
         } catch (Exception e) {
             log.warn("[{}][{}] Failed to stop {} processor: {}", tenantId, id, id.getEntityType(), e.getMessage());
             logAndPersist("OnStop", e, true);
@@ -181,9 +187,10 @@ public abstract class ComponentActor<T extends EntityId, P extends ComponentMsgP
         logLifecycleEvent(event, null);
     }
 
-    private void logLifecycleEvent(ComponentLifecycleEvent event, Exception e) {
+    protected void logLifecycleEvent(ComponentLifecycleEvent event, Exception e) {
         systemContext.persistLifecycleEvent(tenantId, id, event, e);
     }
 
     protected abstract long getErrorPersistFrequency();
+
 }

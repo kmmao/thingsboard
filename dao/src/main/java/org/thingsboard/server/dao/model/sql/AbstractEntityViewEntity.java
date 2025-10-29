@@ -1,5 +1,5 @@
 /**
- * Copyright © 2016-2021 The Thingsboard Authors
+ * Copyright © 2016-2025 The Thingsboard Authors
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -16,30 +16,26 @@
 package org.thingsboard.server.dao.model.sql;
 
 import com.fasterxml.jackson.databind.JsonNode;
-import com.fasterxml.jackson.databind.ObjectMapper;
+import jakarta.persistence.Column;
+import jakarta.persistence.Convert;
+import jakarta.persistence.EnumType;
+import jakarta.persistence.Enumerated;
+import jakarta.persistence.MappedSuperclass;
 import lombok.Data;
 import lombok.EqualsAndHashCode;
 import lombok.extern.slf4j.Slf4j;
-import org.hibernate.annotations.Type;
-import org.hibernate.annotations.TypeDef;
+import org.thingsboard.common.util.JacksonUtil;
 import org.thingsboard.server.common.data.EntityType;
 import org.thingsboard.server.common.data.EntityView;
 import org.thingsboard.server.common.data.id.CustomerId;
-import org.thingsboard.server.common.data.id.EdgeId;
 import org.thingsboard.server.common.data.id.EntityIdFactory;
 import org.thingsboard.server.common.data.id.EntityViewId;
 import org.thingsboard.server.common.data.id.TenantId;
 import org.thingsboard.server.common.data.objects.TelemetryEntityView;
-import org.thingsboard.server.dao.model.BaseSqlEntity;
+import org.thingsboard.server.dao.model.BaseVersionedEntity;
 import org.thingsboard.server.dao.model.ModelConstants;
-import org.thingsboard.server.dao.model.SearchTextEntity;
-import org.thingsboard.server.dao.util.mapping.JsonStringType;
+import org.thingsboard.server.dao.util.mapping.JsonConverter;
 
-import javax.persistence.Column;
-import javax.persistence.EnumType;
-import javax.persistence.Enumerated;
-import javax.persistence.MappedSuperclass;
-import java.io.IOException;
 import java.util.UUID;
 
 import static org.thingsboard.server.dao.model.ModelConstants.ENTITY_TYPE_PROPERTY;
@@ -50,10 +46,9 @@ import static org.thingsboard.server.dao.model.ModelConstants.ENTITY_TYPE_PROPER
 
 @Data
 @EqualsAndHashCode(callSuper = true)
-@TypeDef(name = "json", typeClass = JsonStringType.class)
 @MappedSuperclass
 @Slf4j
-public abstract class AbstractEntityViewEntity<T extends EntityView> extends BaseSqlEntity<T> implements SearchTextEntity<T> {
+public abstract class AbstractEntityViewEntity<T extends EntityView> extends BaseVersionedEntity<T> {
 
     @Column(name = ModelConstants.ENTITY_VIEW_ENTITY_ID_PROPERTY)
     private UUID entityId;
@@ -83,24 +78,19 @@ public abstract class AbstractEntityViewEntity<T extends EntityView> extends Bas
     @Column(name = ModelConstants.ENTITY_VIEW_END_TS_PROPERTY)
     private long endTs;
 
-    @Column(name = ModelConstants.SEARCH_TEXT_PROPERTY)
-    private String searchText;
-
-    @Type(type = "json")
+    @Convert(converter = JsonConverter.class)
     @Column(name = ModelConstants.ENTITY_VIEW_ADDITIONAL_INFO_PROPERTY)
     private JsonNode additionalInfo;
 
-    private static final ObjectMapper mapper = new ObjectMapper();
+    @Column(name = ModelConstants.EXTERNAL_ID_PROPERTY)
+    private UUID externalId;
 
     public AbstractEntityViewEntity() {
         super();
     }
 
-    public AbstractEntityViewEntity(EntityView entityView) {
-        if (entityView.getId() != null) {
-            this.setUuid(entityView.getId().getId());
-        }
-        this.setCreatedTime(entityView.getCreatedTime());
+    public AbstractEntityViewEntity(T entityView) {
+        super(entityView);
         if (entityView.getEntityId() != null) {
             this.entityId = entityView.getEntityId().getId();
             this.entityType = entityView.getEntityId().getEntityType();
@@ -114,19 +104,20 @@ public abstract class AbstractEntityViewEntity<T extends EntityView> extends Bas
         this.type = entityView.getType();
         this.name = entityView.getName();
         try {
-            this.keys = mapper.writeValueAsString(entityView.getKeys());
-        } catch (IOException e) {
+            this.keys = JacksonUtil.toString(entityView.getKeys());
+        } catch (IllegalArgumentException e) {
             log.error("Unable to serialize entity view keys!", e);
         }
         this.startTs = entityView.getStartTimeMs();
         this.endTs = entityView.getEndTimeMs();
-        this.searchText = entityView.getSearchText();
         this.additionalInfo = entityView.getAdditionalInfo();
+        if (entityView.getExternalId() != null) {
+            this.externalId = entityView.getExternalId().getId();
+        }
     }
 
     public AbstractEntityViewEntity(EntityViewEntity entityViewEntity) {
-        this.setId(entityViewEntity.getId());
-        this.setCreatedTime(entityViewEntity.getCreatedTime());
+        super(entityViewEntity);
         this.entityId = entityViewEntity.getEntityId();
         this.entityType = entityViewEntity.getEntityType();
         this.tenantId = entityViewEntity.getTenantId();
@@ -136,29 +127,20 @@ public abstract class AbstractEntityViewEntity<T extends EntityView> extends Bas
         this.keys = entityViewEntity.getKeys();
         this.startTs = entityViewEntity.getStartTs();
         this.endTs = entityViewEntity.getEndTs();
-        this.searchText = entityViewEntity.getSearchText();
         this.additionalInfo = entityViewEntity.getAdditionalInfo();
-    }
-
-    @Override
-    public String getSearchTextSource() {
-        return name;
-    }
-
-    @Override
-    public void setSearchText(String searchText) {
-        this.searchText = searchText;
+        this.externalId = entityViewEntity.getExternalId();
     }
 
     protected EntityView toEntityView() {
         EntityView entityView = new EntityView(new EntityViewId(getUuid()));
         entityView.setCreatedTime(createdTime);
+        entityView.setVersion(version);
 
         if (entityId != null) {
             entityView.setEntityId(EntityIdFactory.getByTypeAndUuid(entityType.name(), entityId));
         }
         if (tenantId != null) {
-            entityView.setTenantId(new TenantId(tenantId));
+            entityView.setTenantId(TenantId.fromUUID(tenantId));
         }
         if (customerId != null) {
             entityView.setCustomerId(new CustomerId(customerId));
@@ -166,13 +148,17 @@ public abstract class AbstractEntityViewEntity<T extends EntityView> extends Bas
         entityView.setType(type);
         entityView.setName(name);
         try {
-            entityView.setKeys(mapper.readValue(keys, TelemetryEntityView.class));
-        } catch (IOException e) {
+            entityView.setKeys(JacksonUtil.fromString(keys, TelemetryEntityView.class));
+        } catch (IllegalArgumentException e) {
             log.error("Unable to read entity view keys!", e);
         }
         entityView.setStartTimeMs(startTs);
         entityView.setEndTimeMs(endTs);
         entityView.setAdditionalInfo(additionalInfo);
+        if (externalId != null) {
+            entityView.setExternalId(new EntityViewId(externalId));
+        }
         return entityView;
     }
+
 }

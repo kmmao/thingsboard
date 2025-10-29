@@ -1,5 +1,5 @@
 /**
- * Copyright © 2016-2021 The Thingsboard Authors
+ * Copyright © 2016-2025 The Thingsboard Authors
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -15,9 +15,8 @@
  */
 package org.thingsboard.server.common.msg;
 
-import lombok.AllArgsConstructor;
+import com.fasterxml.jackson.annotation.JsonIgnore;
 import lombok.Data;
-import lombok.NoArgsConstructor;
 
 import java.io.Serializable;
 import java.util.Collections;
@@ -25,19 +24,27 @@ import java.util.HashMap;
 import java.util.Map;
 import java.util.concurrent.ConcurrentHashMap;
 
-/**
- * Created by ashvayka on 13.01.18.
- */
 @Data
-@NoArgsConstructor
 public final class TbMsgMetaData implements Serializable {
 
-    public static final TbMsgMetaData EMPTY = new TbMsgMetaData(Collections.emptyMap());
+    public static final TbMsgMetaData EMPTY = new TbMsgMetaData(0);
 
-    private final Map<String, String> data = new ConcurrentHashMap<>();
+    private final Map<String, String> data;
+
+    public TbMsgMetaData() {
+        data = new ConcurrentHashMap<>();
+    }
 
     public TbMsgMetaData(Map<String, String> data) {
-        data.forEach((key, val) -> putValue(key, val));
+        this.data = new ConcurrentHashMap<>();
+        data.forEach(this::putValue);
+    }
+
+    /**
+     * Internal constructor to create immutable TbMsgMetaData.EMPTY
+     * */
+    private TbMsgMetaData(int ignored) {
+        data = Collections.emptyMap();
     }
 
     public String getValue(String key) {
@@ -55,6 +62,12 @@ public final class TbMsgMetaData implements Serializable {
     }
 
     public TbMsgMetaData copy() {
-        return new TbMsgMetaData(new ConcurrentHashMap<>(data));
+        return new TbMsgMetaData(data);
     }
+
+    @JsonIgnore
+    public boolean isEmpty() {
+        return data == null || data.isEmpty();
+    }
+
 }

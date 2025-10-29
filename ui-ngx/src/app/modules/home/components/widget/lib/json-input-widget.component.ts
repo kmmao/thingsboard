@@ -1,5 +1,5 @@
 ///
-/// Copyright © 2016-2021 The Thingsboard Authors
+/// Copyright © 2016-2025 The Thingsboard Authors
 ///
 /// Licensed under the Apache License, Version 2.0 (the "License");
 /// you may not use this file except in compliance with the License.
@@ -14,7 +14,7 @@
 /// limitations under the License.
 ///
 
-import { Component, Input, OnInit } from '@angular/core';
+import { Component, DestroyRef, Input, OnInit } from '@angular/core';
 import { PageComponent } from '@shared/components/page.component';
 import { WidgetContext } from '@home/models/widget-component.models';
 import { Store } from '@ngrx/store';
@@ -23,13 +23,15 @@ import { UtilsService } from '@core/services/utils.service';
 import { TranslateService } from '@ngx-translate/core';
 import { Datasource, DatasourceData, DatasourceType, WidgetConfig } from '@shared/models/widget.models';
 import { IWidgetSubscription } from '@core/api/widget-api.models';
-import { FormBuilder, FormGroup, ValidatorFn, Validators } from '@angular/forms';
+import { UntypedFormBuilder, UntypedFormGroup, ValidatorFn } from '@angular/forms';
 import { AttributeService } from '@core/http/attribute.service';
 import { AttributeData, AttributeScope, DataKeyType, LatestTelemetry } from '@shared/models/telemetry/telemetry.models';
 import { EntityId } from '@shared/models/id/entity-id';
 import { EntityType } from '@shared/models/entity-type.models';
-import { createLabelFromDatasource } from '@core/utils';
+import { createLabelFromDatasource, isDefinedAndNotNull } from '@core/utils';
 import { Observable } from 'rxjs';
+import { jsonRequired } from '@shared/components/json-object-edit.component';
+import { takeUntilDestroyed } from '@angular/core/rxjs-interop';
 
 enum JsonInputWidgetMode {
   ATTRIBUTE = 'ATTRIBUTE',
@@ -63,22 +65,21 @@ export class JsonInputWidgetComponent extends PageComponent implements OnInit {
 
   labelValue: string;
 
-  entityDetected = false;
-  dataKeyDetected = false;
-  isValidParameter = false;
+  datasourceDetected = false;
   errorMessage: string;
 
   isFocused: boolean;
   originalValue: any;
-  attributeUpdateFormGroup: FormGroup;
+  attributeUpdateFormGroup: UntypedFormGroup;
 
   toastTargetId = 'json-input-widget' + this.utils.guid();
 
   constructor(protected store: Store<AppState>,
               private utils: UtilsService,
-              private fb: FormBuilder,
+              private fb: UntypedFormBuilder,
               private attributeService: AttributeService,
-              private translate: TranslateService) {
+              private translate: TranslateService,
+              private destroyRef: DestroyRef) {
     super(store);
   }
 
@@ -96,12 +97,8 @@ export class JsonInputWidgetComponent extends PageComponent implements OnInit {
 
   private initializeConfig() {
     if (this.settings.widgetTitle && this.settings.widgetTitle.length) {
-      const title = createLabelFromDatasource(this.datasource, this.settings.widgetTitle);
-      this.ctx.widgetTitle = this.utils.customTranslation(title, title);
-    } else {
-      this.ctx.widgetTitle = this.ctx.widgetConfig.title;
+      this.ctx.widgetTitle = this.settings.widgetTitle;
     }
-
     if (this.settings.labelValue && this.settings.labelValue.length) {
       const label = createLabelFromDatasource(this.datasource, this.settings.labelValue);
       this.labelValue = this.utils.customTranslation(label, label);
@@ -111,49 +108,47 @@ export class JsonInputWidgetComponent extends PageComponent implements OnInit {
   }
 
   private validateDatasources() {
-    if (this.datasource?.type === DatasourceType.entity) {
-      this.entityDetected = true;
-      if (this.datasource.dataKeys.length) {
-        this.dataKeyDetected = true;
-
-        if (this.settings.widgetMode === JsonInputWidgetMode.ATTRIBUTE) {
-          if (this.datasource.dataKeys[0].type === DataKeyType.attribute) {
-            if (this.settings.attributeScope === AttributeScope.SERVER_SCOPE || this.datasource.entityType === EntityType.DEVICE) {
-              this.isValidParameter = true;
-            } else {
-              this.errorMessage = 'widgets.input-widgets.not-allowed-entity';
-            }
-          } else {
-            this.errorMessage = 'widgets.input-widgets.no-attribute-selected';
+    this.datasourceDetected = isDefinedAndNotNull(this.datasource);
+    if (!this.datasourceDetected) {
+      return;
+    }
+    if (this.datasource.type === DatasourceType.entity) {
+      if (this.settings.widgetMode === JsonInputWidgetMode.ATTRIBUTE) {
+        if (this.datasource.dataKeys[0].type === DataKeyType.attribute) {
+          if (this.settings.attributeScope !== AttributeScope.SERVER_SCOPE && this.datasource.entityType !== EntityType.DEVICE) {
+            this.errorMessage = 'widgets.input-widgets.not-allowed-entity';
           }
         } else {
-          if (this.datasource.dataKeys[0].type === DataKeyType.timeseries) {
-            this.isValidParameter = true;
-          } else {
-            this.errorMessage = 'widgets.input-widgets.no-timeseries-selected';
-          }
+          this.errorMessage = 'widgets.input-widgets.no-attribute-selected';
         }
-
+      } else {
+        if (this.datasource.dataKeys[0].type !== DataKeyType.timeseries) {
+          this.errorMessage = 'widgets.input-widgets.no-timeseries-selected';
+        }
       }
+    } else {
+      this.errorMessage = 'widgets.input-widgets.no-entity-selected';
     }
   }
 
   private buildForm() {
     const validators: ValidatorFn[] = [];
     if (this.settings.attributeRequired) {
-      validators.push(Validators.required);
+      validators.push(jsonRequired);
     }
     this.attributeUpdateFormGroup = this.fb.group({
       currentValue: [{}, validators]
     });
-    this.attributeUpdateFormGroup.valueChanges.subscribe(() => {
+    this.attributeUpdateFormGroup.valueChanges.pipe(
+      takeUntilDestroyed(this.destroyRef)
+    ).subscribe(() => {
       this.ctx.detectChanges();
     });
   }
 
   private updateWidgetData(data: Array<DatasourceData>) {
-    if (this.isValidParameter) {
-      let value = {};
+    if (!this.errorMessage) {
+      let value = null;
       if (data[0].data[0][1] !== '') {
         try {
           value = JSON.parse(data[0].data[0][1]);

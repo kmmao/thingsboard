@@ -1,5 +1,5 @@
 ///
-/// Copyright © 2016-2021 The Thingsboard Authors
+/// Copyright © 2016-2025 The Thingsboard Authors
 ///
 /// Licensed under the Apache License, Version 2.0 (the "License");
 /// you may not use this file except in compliance with the License.
@@ -19,7 +19,7 @@ import { ErrorStateMatcher } from '@angular/material/core';
 import { MAT_DIALOG_DATA, MatDialogRef } from '@angular/material/dialog';
 import { Store } from '@ngrx/store';
 import { AppState } from '@core/core.state';
-import { FormBuilder, FormControl, FormGroup, FormGroupDirective, NgForm, Validators } from '@angular/forms';
+import { UntypedFormBuilder, UntypedFormControl, UntypedFormGroup, FormGroupDirective, NgForm, Validators } from '@angular/forms';
 import { DeviceService } from '@core/http/device.service';
 import { EdgeService } from '@core/http/edge.service';
 import { EntityType } from '@shared/models/entity-type.models';
@@ -46,7 +46,7 @@ export interface AddEntitiesToEdgeDialogData {
 export class AddEntitiesToEdgeDialogComponent extends
   DialogComponent<AddEntitiesToEdgeDialogComponent, boolean> implements OnInit, ErrorStateMatcher {
 
-  addEntitiesToEdgeFormGroup: FormGroup;
+  addEntitiesToEdgeFormGroup: UntypedFormGroup;
 
   submitted = false;
 
@@ -67,9 +67,9 @@ export class AddEntitiesToEdgeDialogComponent extends
               private ruleChainService: RuleChainService,
               @SkipSelf() private errorStateMatcher: ErrorStateMatcher,
               public dialogRef: MatDialogRef<AddEntitiesToEdgeDialogComponent, boolean>,
-              public fb: FormBuilder) {
+              public fb: UntypedFormBuilder) {
     super(store, router, dialogRef);
-    this.entityType = data.entityType;
+    this.entityType = this.data.entityType;
   }
 
   ngOnInit(): void {
@@ -77,7 +77,7 @@ export class AddEntitiesToEdgeDialogComponent extends
       entityIds: [null, [Validators.required]]
     });
     this.subType = '';
-    switch (this.data.entityType) {
+    switch (this.entityType) {
       case EntityType.DEVICE:
         this.assignToEdgeTitle = 'device.assign-device-to-edge-title';
         this.assignToEdgeText = 'device.assign-device-to-edge-text';
@@ -102,7 +102,7 @@ export class AddEntitiesToEdgeDialogComponent extends
     }
   }
 
-  isErrorState(control: FormControl | null, form: FormGroupDirective | NgForm | null): boolean {
+  isErrorState(control: UntypedFormControl | null, form: FormGroupDirective | NgForm | null): boolean {
     const originalErrorState = this.errorStateMatcher.isErrorState(control, form);
     const customErrorState = !!(control && control.invalid && this.submitted);
     return originalErrorState || customErrorState;
@@ -118,7 +118,7 @@ export class AddEntitiesToEdgeDialogComponent extends
     const tasks: Observable<any>[] = [];
     entityIds.forEach(
       (entityId) => {
-        tasks.push(this.getAssignToEdgeTask(this.data.edgeId, entityId));
+        tasks.push(this.getAssignToEdgeTask(this.data.edgeId, entityId, this.entityType));
       }
     );
     forkJoin(tasks).subscribe(
@@ -128,8 +128,8 @@ export class AddEntitiesToEdgeDialogComponent extends
     );
   }
 
-  private getAssignToEdgeTask(edgeId: string, entityId: string): Observable<any> {
-    switch (this.data.entityType) {
+  private getAssignToEdgeTask(edgeId: string, entityId: string, entityType: EntityType): Observable<any> {
+    switch (entityType) {
       case EntityType.DEVICE:
         return this.deviceService.assignDeviceToEdge(edgeId, entityId);
       case EntityType.ASSET:

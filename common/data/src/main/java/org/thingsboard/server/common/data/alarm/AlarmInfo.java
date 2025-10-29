@@ -1,5 +1,5 @@
 /**
- * Copyright © 2016-2021 The Thingsboard Authors
+ * Copyright © 2016-2025 The Thingsboard Authors
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -15,11 +15,38 @@
  */
 package org.thingsboard.server.common.data.alarm;
 
+import io.swagger.v3.oas.annotations.media.Schema;
+import lombok.EqualsAndHashCode;
+import lombok.Getter;
+import lombok.Setter;
+import lombok.ToString;
+
+@EqualsAndHashCode(callSuper = true)
+@ToString(callSuper = true)
+@Schema
 public class AlarmInfo extends Alarm {
 
     private static final long serialVersionUID = 2807343093519543363L;
 
+    @Getter
+    @Setter
+    @Schema(description = "Alarm originator name", example = "Thermostat")
     private String originatorName;
+
+    @Getter
+    @Setter
+    @Schema(description = "Alarm originator label", example = "Thermostat label")
+    private String originatorLabel;
+
+    @Getter
+    @Setter
+    @Schema(description = "Originator display name", example = "Thermostat")
+    private String originatorDisplayName;
+
+    @Getter
+    @Setter
+    @Schema(description = "Alarm assignee")
+    private AlarmAssignee assignee;
 
     public AlarmInfo() {
         super();
@@ -29,35 +56,18 @@ public class AlarmInfo extends Alarm {
         super(alarm);
     }
 
-    public AlarmInfo(Alarm alarm, String originatorName) {
+    public AlarmInfo(AlarmInfo alarmInfo) {
+        super(alarmInfo);
+        this.originatorName = alarmInfo.originatorName;
+        this.originatorLabel = alarmInfo.originatorLabel;
+        this.assignee = alarmInfo.getAssignee();
+    }
+
+    public AlarmInfo(Alarm alarm, String originatorName, String originatorLabel, AlarmAssignee assignee) {
         super(alarm);
         this.originatorName = originatorName;
+        this.originatorLabel = originatorLabel;
+        this.assignee = assignee;
     }
 
-    public String getOriginatorName() {
-        return originatorName;
-    }
-
-    public void setOriginatorName(String originatorName) {
-        this.originatorName = originatorName;
-    }
-
-    @Override
-    public boolean equals(Object o) {
-        if (this == o) return true;
-        if (o == null || getClass() != o.getClass()) return false;
-        if (!super.equals(o)) return false;
-
-        AlarmInfo alarmInfo = (AlarmInfo) o;
-
-        return originatorName != null ? originatorName.equals(alarmInfo.originatorName) : alarmInfo.originatorName == null;
-
-    }
-
-    @Override
-    public int hashCode() {
-        int result = super.hashCode();
-        result = 31 * result + (originatorName != null ? originatorName.hashCode() : 0);
-        return result;
-    }
 }

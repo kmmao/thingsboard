@@ -1,5 +1,5 @@
 /**
- * Copyright © 2016-2021 The Thingsboard Authors
+ * Copyright © 2016-2025 The Thingsboard Authors
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -20,12 +20,18 @@ import com.google.gson.JsonObject;
 import com.google.gson.JsonParser;
 import org.locationtech.spatial4j.context.jts.JtsSpatialContext;
 import org.locationtech.spatial4j.context.jts.JtsSpatialContextFactory;
-import org.springframework.util.StringUtils;
+import org.thingsboard.common.util.JacksonUtil;
+import org.thingsboard.common.util.geo.Coordinates;
+import org.thingsboard.common.util.geo.GeoUtil;
+import org.thingsboard.common.util.geo.Perimeter;
+import org.thingsboard.common.util.geo.PerimeterType;
+import org.thingsboard.common.util.geo.RangeUnit;
 import org.thingsboard.rule.engine.api.TbContext;
 import org.thingsboard.rule.engine.api.TbNode;
 import org.thingsboard.rule.engine.api.TbNodeConfiguration;
 import org.thingsboard.rule.engine.api.TbNodeException;
 import org.thingsboard.rule.engine.api.util.TbNodeUtils;
+import org.thingsboard.server.common.data.StringUtils;
 import org.thingsboard.server.common.msg.TbMsg;
 
 import java.util.Collections;
@@ -47,14 +53,14 @@ public abstract class AbstractGeofencingNode<T extends TbGpsGeofencingFilterNode
     abstract protected Class<T> getConfigClazz();
 
     protected boolean checkMatches(TbMsg msg) throws TbNodeException {
-        JsonElement msgDataElement = new JsonParser().parse(msg.getData());
+        JsonElement msgDataElement = JsonParser.parseString(msg.getData());
         if (!msgDataElement.isJsonObject()) {
-            throw new TbNodeException("Incoming Message is not a valid JSON object");
+            throw new TbNodeException("Incoming Message is not a valid JSON object!");
         }
         JsonObject msgDataObj = msgDataElement.getAsJsonObject();
         double latitude = getValueFromMessageByName(msg, msgDataObj, config.getLatitudeKeyName());
         double longitude = getValueFromMessageByName(msg, msgDataObj, config.getLongitudeKeyName());
-        List<Perimeter> perimeters = getPerimeters(msg, msgDataObj);
+        List<Perimeter> perimeters = getPerimeters(msg);
         boolean matches = false;
         for (Perimeter perimeter : perimeters) {
             if (checkMatches(perimeter, latitude, longitude)) {
@@ -73,28 +79,52 @@ public abstract class AbstractGeofencingNode<T extends TbGpsGeofencingFilterNode
         } else if (perimeter.getPerimeterType() == PerimeterType.POLYGON) {
             return GeoUtil.contains(perimeter.getPolygonsDefinition(), new Coordinates(latitude, longitude));
         } else {
-            throw new TbNodeException("Unsupported perimeter type: " + perimeter.getPerimeterType());
+            throw new TbNodeException("Unsupported perimeter type: " + perimeter.getPerimeterType() + "!");
         }
     }
 
-    protected List<Perimeter> getPerimeters(TbMsg msg, JsonObject msgDataObj) throws TbNodeException {
+    protected List<Perimeter> getPerimeters(TbMsg msg) throws TbNodeException {
         if (config.isFetchPerimeterInfoFromMessageMetadata()) {
-            //TODO: add fetching perimeters from the message itself, if configuration is empty.
-            if (!StringUtils.isEmpty(msg.getMetaData().getValue("perimeter"))) {
-                Perimeter perimeter = new Perimeter();
-                perimeter.setPerimeterType(PerimeterType.POLYGON);
-                perimeter.setPolygonsDefinition(msg.getMetaData().getValue("perimeter"));
-                return Collections.singletonList(perimeter);
-            } else if (!StringUtils.isEmpty(msg.getMetaData().getValue("centerLatitude"))) {
-                Perimeter perimeter = new Perimeter();
-                perimeter.setPerimeterType(PerimeterType.CIRCLE);
-                perimeter.setCenterLatitude(Double.parseDouble(msg.getMetaData().getValue("centerLatitude")));
-                perimeter.setCenterLongitude(Double.parseDouble(msg.getMetaData().getValue("centerLongitude")));
-                perimeter.setRange(Double.parseDouble(msg.getMetaData().getValue("range")));
-                perimeter.setRangeUnit(RangeUnit.valueOf(msg.getMetaData().getValue("rangeUnit")));
-                return Collections.singletonList(perimeter);
+            if (StringUtils.isEmpty(config.getPerimeterKeyName())) {
+                // Old configuration before "perimeterKeyName" was introduced
+                String perimeterValue = msg.getMetaData().getValue("perimeter");
+                if (!StringUtils.isEmpty(perimeterValue)) {
+                    Perimeter perimeter = new Perimeter();
+                    perimeter.setPerimeterType(PerimeterType.POLYGON);
+                    perimeter.setPolygonsDefinition(perimeterValue);
+                    return Collections.singletonList(perimeter);
+                } else if (!StringUtils.isEmpty(msg.getMetaData().getValue("centerLatitude"))) {
+                    Perimeter perimeter = new Perimeter();
+                    perimeter.setPerimeterType(PerimeterType.CIRCLE);
+                    perimeter.setCenterLatitude(Double.parseDouble(msg.getMetaData().getValue("centerLatitude")));
+                    perimeter.setCenterLongitude(Double.parseDouble(msg.getMetaData().getValue("centerLongitude")));
+                    perimeter.setRange(Double.parseDouble(msg.getMetaData().getValue("range")));
+                    perimeter.setRangeUnit(RangeUnit.valueOf(msg.getMetaData().getValue("rangeUnit")));
+                    return Collections.singletonList(perimeter);
+                } else {
+                    throw new TbNodeException("Missing perimeter definition!");
+                }
             } else {
-                throw new TbNodeException("Missing perimeter definition!");
+                String perimeterValue = msg.getMetaData().getValue(config.getPerimeterKeyName());
+                if (!StringUtils.isEmpty(perimeterValue)) {
+                    if (config.getPerimeterType().equals(PerimeterType.POLYGON)) {
+                        Perimeter perimeter = new Perimeter();
+                        perimeter.setPerimeterType(PerimeterType.POLYGON);
+                        perimeter.setPolygonsDefinition(perimeterValue);
+                        return Collections.singletonList(perimeter);
+                    } else {
+                        var circleDef = JacksonUtil.toJsonNode(perimeterValue);
+                        Perimeter perimeter = new Perimeter();
+                        perimeter.setPerimeterType(PerimeterType.CIRCLE);
+                        perimeter.setCenterLatitude(circleDef.get("latitude").asDouble());
+                        perimeter.setCenterLongitude(circleDef.get("longitude").asDouble());
+                        perimeter.setRange(circleDef.get("radius").asDouble());
+                        perimeter.setRangeUnit(circleDef.has("radiusUnit") ? RangeUnit.valueOf(circleDef.get("radiusUnit").asText()) : RangeUnit.METER);
+                        return Collections.singletonList(perimeter);
+                    }
+                } else {
+                    throw new TbNodeException("Missing perimeter definition!");
+                }
             }
         } else {
             Perimeter perimeter = new Perimeter();
@@ -121,11 +151,6 @@ public abstract class AbstractGeofencingNode<T extends TbGpsGeofencingFilterNode
             }
         }
         return value;
-    }
-
-    @Override
-    public void destroy() {
-
     }
 
 }

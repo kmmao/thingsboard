@@ -1,5 +1,5 @@
 ///
-/// Copyright © 2016-2021 The Thingsboard Authors
+/// Copyright © 2016-2025 The Thingsboard Authors
 ///
 /// Licensed under the Apache License, Version 2.0 (the "License");
 /// you may not use this file except in compliance with the License.
@@ -16,7 +16,7 @@
 
 import {
   AfterViewInit, ChangeDetectorRef,
-  Component, ComponentFactoryResolver, ComponentRef,
+  Component, ComponentRef,
   Directive,
   ElementRef, HostBinding,
   Inject,
@@ -31,7 +31,7 @@ import {
 import { MAT_SNACK_BAR_DATA, MatSnackBar, MatSnackBarConfig, MatSnackBarRef } from '@angular/material/snack-bar';
 import { NotificationMessage } from '@app/core/notification/notification.models';
 import { Subscription } from 'rxjs';
-import { NotificationService } from '@app/core/services/notification.service';
+import { ToastNotificationService } from '@core/services/toast-notification.service';
 import { BreakpointObserver } from '@angular/cdk/layout';
 import { MediaBreakpoints } from '@shared/models/constants';
 import { MatButton } from '@angular/material/button';
@@ -56,8 +56,7 @@ export class ToastDirective implements AfterViewInit, OnDestroy {
 
   constructor(private elementRef: ElementRef,
               private viewContainerRef: ViewContainerRef,
-              private notificationService: NotificationService,
-              private componentFactoryResolver: ComponentFactoryResolver,
+              private notificationService: ToastNotificationService,
               private snackBar: MatSnackBar,
               private ngZone: NgZone,
               private breakpointObserver: BreakpointObserver,
@@ -84,6 +83,7 @@ export class ToastDirective implements AfterViewInit, OnDestroy {
         if (hideNotification) {
           const target = hideNotification.target || 'root';
           if (this.toastTarget === target) {
+            this.currentMessage = null;
             this.ngZone.run(() => {
               if (this.snackBarRef) {
                 this.snackBarRef.dismiss();
@@ -130,7 +130,6 @@ export class ToastDirective implements AfterViewInit, OnDestroy {
         panelClass.push('bottom');
       }
 
-      const componentFactory = this.componentFactoryResolver.resolveComponentFactory(TbSnackBarComponent);
       const data: ToastPanelData = {
         notification: notificationMessage,
         panelClass,
@@ -143,7 +142,7 @@ export class ToastDirective implements AfterViewInit, OnDestroy {
         {provide: MAT_SNACK_BAR_DATA, useValue: data}
       ];
       const injector = Injector.create({parent: this.viewContainerRef.injector, providers});
-      this.toastComponentRef = this.viewContainerRef.createComponent(componentFactory, 0, injector);
+      this.toastComponentRef = this.viewContainerRef.createComponent(TbSnackBarComponent, {index: 0, injector});
       this.cd.detectChanges();
 
       if (notificationMessage.duration && notificationMessage.duration > 0) {
@@ -280,7 +279,7 @@ export type ToastAnimationState = 'default' | 'opened' | 'closing';
 })
 export class TbSnackBarComponent implements AfterViewInit, OnDestroy {
 
-  @ViewChild('actionButton', {static: true}) actionButton: MatButton;
+  @ViewChild('actionButton') actionButton: MatButton;
 
   @HostBinding('class')
   get panelClass(): string[] {
@@ -312,7 +311,7 @@ export class TbSnackBarComponent implements AfterViewInit, OnDestroy {
   ngAfterViewInit() {
     if (this.snackBarRef) {
       this.parentEl = this.data.parent.nativeElement;
-      this.snackBarContainerEl = this.elementRef.nativeElement.parentNode;
+      this.snackBarContainerEl = $(this.elementRef.nativeElement).closest('.mat-mdc-snack-bar-container')[0];
       this.snackBarContainerEl.style.position = 'absolute';
       this.updateContainerRect();
       this.updatePosition(this.snackBarRef.containerInstance.snackBarConfig);

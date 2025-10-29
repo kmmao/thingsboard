@@ -1,5 +1,5 @@
 ///
-/// Copyright © 2016-2021 The Thingsboard Authors
+/// Copyright © 2016-2025 The Thingsboard Authors
 ///
 /// Licensed under the Apache License, Version 2.0 (the "License");
 /// you may not use this file except in compliance with the License.
@@ -16,7 +16,7 @@
 
 import { Injectable } from '@angular/core';
 
-import { ActivatedRouteSnapshot, Resolve } from '@angular/router';
+import { ActivatedRouteSnapshot, Router } from '@angular/router';
 import {
   DateEntityTableColumn,
   EntityTableColumn,
@@ -30,7 +30,7 @@ import { UserService } from '@core/http/user.service';
 import { UserComponent } from '@modules/home/pages/user/user.component';
 import { CustomerService } from '@core/http/customer.service';
 import { map, mergeMap, take, tap } from 'rxjs/operators';
-import { Observable } from 'rxjs';
+import { Observable, of } from 'rxjs';
 import { Authority } from '@shared/models/authority.enum';
 import { CustomerId } from '@shared/models/id/customer-id';
 import { MatDialog } from '@angular/material/dialog';
@@ -50,13 +50,14 @@ import { NULL_UUID } from '@shared/models/id/has-uuid';
 import { TenantService } from '@app/core/http/tenant.service';
 import { TenantId } from '@app/shared/models/id/tenant-id';
 import { UserTabsComponent } from '@home/pages/user/user-tabs.component';
+import { isDefinedAndNotNull } from '@core/utils';
 
 export interface UsersTableRouteData {
   authority: Authority;
 }
 
 @Injectable()
-export class UsersTableConfigResolver implements Resolve<EntityTableConfig<User>> {
+export class UsersTableConfigResolver  {
 
   private readonly config: EntityTableConfig<User> = new EntityTableConfig<User>();
 
@@ -72,6 +73,7 @@ export class UsersTableConfigResolver implements Resolve<EntityTableConfig<User>
               private customerService: CustomerService,
               private translate: TranslateService,
               private datePipe: DatePipe,
+              private router: Router,
               private dialog: MatDialog) {
 
     this.config.entityType = EntityType.USER;
@@ -96,7 +98,7 @@ export class UsersTableConfigResolver implements Resolve<EntityTableConfig<User>
     this.config.loadEntity = id => this.userService.getUser(id.id);
     this.config.saveEntity = user => this.saveUser(user);
     this.config.deleteEntity = id => this.userService.deleteUser(id.id);
-    this.config.onEntityAction = action => this.onUserAction(action);
+    this.config.onEntityAction = action => this.onUserAction(action, this.config);
     this.config.addEntity = () => this.addUser();
   }
 
@@ -117,9 +119,14 @@ export class UsersTableConfigResolver implements Resolve<EntityTableConfig<User>
         }
         this.updateActionCellDescriptors(auth);
       }),
-      mergeMap(() => this.authority === Authority.TENANT_ADMIN ?
-        this.tenantService.getTenant(this.tenantId) :
-        this.customerService.getCustomer(this.customerId)),
+      mergeMap(() => {
+        if (this.authority === Authority.TENANT_ADMIN) {
+          return this.tenantService.getTenant(this.tenantId);
+        } else if (isDefinedAndNotNull(this.customerId)) {
+          return this.customerService.getCustomer(this.customerId);
+        }
+        return of({title: ''});
+      }),
       map((parentEntity) => {
         if (this.authority === Authority.TENANT_ADMIN) {
           this.config.tableTitle = parentEntity.title + ': ' + this.translate.instant('user.tenant-admins');
@@ -139,7 +146,7 @@ export class UsersTableConfigResolver implements Resolve<EntityTableConfig<User>
           name: this.authority === Authority.TENANT_ADMIN ?
             this.translate.instant('user.login-as-tenant-admin') :
             this.translate.instant('user.login-as-customer-user'),
-          mdiIcon: 'mdi:login',
+          icon: 'mdi:login',
           isEnabled: () => true,
           onAction: ($event, entity) => this.loginAsUser($event, entity)
         }
@@ -167,6 +174,14 @@ export class UsersTableConfigResolver implements Resolve<EntityTableConfig<User>
     }).afterClosed();
   }
 
+  private openUser($event: Event, user: User, config: EntityTableConfig<User>) {
+    if ($event) {
+      $event.stopPropagation();
+    }
+    const url = this.router.createUrlTree([user.id.id], {relativeTo: config.getActivatedRoute()});
+    this.router.navigateByUrl(url);
+  }
+
   loginAsUser($event: Event, user: User) {
     if ($event) {
       $event.stopPropagation();
@@ -178,14 +193,14 @@ export class UsersTableConfigResolver implements Resolve<EntityTableConfig<User>
     if ($event) {
       $event.stopPropagation();
     }
-    this.userService.getActivationLink(user.id.id).subscribe(
-      (activationLink) => {
+    this.userService.getActivationLinkInfo(user.id.id).subscribe(
+      (activationLinkInfo) => {
         this.dialog.open<ActivationLinkDialogComponent, ActivationLinkDialogData,
           void>(ActivationLinkDialogComponent, {
           disableClose: true,
           panelClass: ['tb-dialog', 'tb-fullscreen-dialog'],
           data: {
-            activationLink
+            activationLinkInfo
           }
         });
       }
@@ -222,8 +237,11 @@ export class UsersTableConfigResolver implements Resolve<EntityTableConfig<User>
     });
   }
 
-  onUserAction(action: EntityAction<User>): boolean {
+  onUserAction(action: EntityAction<User>, config: EntityTableConfig<User>): boolean {
     switch (action.action) {
+      case 'open':
+        this.openUser(action.event, action.entity, config);
+        return true;
       case 'loginAsUser':
         this.loginAsUser(action.event, action.entity);
         return true;

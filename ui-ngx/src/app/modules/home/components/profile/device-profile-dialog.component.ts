@@ -1,5 +1,5 @@
 ///
-/// Copyright © 2016-2021 The Thingsboard Authors
+/// Copyright © 2016-2025 The Thingsboard Authors
 ///
 /// Licensed under the Apache License, Version 2.0 (the "License");
 /// you may not use this file except in compliance with the License.
@@ -14,20 +14,12 @@
 /// limitations under the License.
 ///
 
-import {
-  AfterViewInit,
-  Component,
-  ComponentFactoryResolver,
-  Inject,
-  Injector,
-  SkipSelf,
-  ViewChild
-} from '@angular/core';
+import { AfterViewInit, Component, Inject, SkipSelf, ViewChild } from '@angular/core';
 import { ErrorStateMatcher } from '@angular/material/core';
 import { MAT_DIALOG_DATA, MatDialogRef } from '@angular/material/dialog';
 import { Store } from '@ngrx/store';
 import { AppState } from '@core/core.state';
-import { FormControl, FormGroupDirective, NgForm } from '@angular/forms';
+import { FormGroupDirective, NgForm, UntypedFormControl } from '@angular/forms';
 import { DialogComponent } from '@shared/components/dialog.component';
 import { Router } from '@angular/router';
 import { DeviceProfile } from '@shared/models/device.models';
@@ -59,8 +51,6 @@ export class DeviceProfileDialogComponent extends
               protected router: Router,
               @Inject(MAT_DIALOG_DATA) public data: DeviceProfileDialogData,
               public dialogRef: MatDialogRef<DeviceProfileDialogComponent, DeviceProfile>,
-              private componentFactoryResolver: ComponentFactoryResolver,
-              private injector: Injector,
               @SkipSelf() private errorStateMatcher: ErrorStateMatcher,
               private deviceProfileService: DeviceProfileService) {
     super(store, router, dialogRef);
@@ -76,7 +66,7 @@ export class DeviceProfileDialogComponent extends
     }
   }
 
-  isErrorState(control: FormControl | null, form: FormGroupDirective | NgForm | null): boolean {
+  isErrorState(control: UntypedFormControl | null, form: FormGroupDirective | NgForm | null): boolean {
     const originalErrorState = this.errorStateMatcher.isErrorState(control, form);
     const customErrorState = !!(control && control.invalid && this.submitted);
     return originalErrorState || customErrorState;
@@ -90,7 +80,7 @@ export class DeviceProfileDialogComponent extends
     this.submitted = true;
     if (this.deviceProfileComponent.entityForm.valid) {
       this.deviceProfile = {...this.deviceProfile, ...this.deviceProfileComponent.entityFormValue()};
-      this.deviceProfileService.saveDeviceProfile(this.deviceProfile).subscribe(
+      this.deviceProfileService.saveDeviceProfileAndConfirmOtaChange(this.deviceProfile, this.deviceProfile).subscribe(
         (deviceProfile) => {
           this.dialogRef.close(deviceProfile);
         }

@@ -1,5 +1,5 @@
 /**
- * Copyright © 2016-2021 The Thingsboard Authors
+ * Copyright © 2016-2025 The Thingsboard Authors
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -27,16 +27,12 @@ import org.springframework.stereotype.Component;
 public class CoapServerContext {
 
     @Getter
-    @Value("${transport.coap.bind_address}")
+    @Value("${coap.bind_address}")
     private String host;
 
     @Getter
-    @Value("${transport.coap.bind_port}")
+    @Value("${coap.bind_port}")
     private Integer port;
-
-    @Getter
-    @Value("${transport.coap.timeout}")
-    private Long timeout;
 
     @Getter
     @Autowired(required = false)

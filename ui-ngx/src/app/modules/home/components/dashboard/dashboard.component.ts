@@ -1,5 +1,5 @@
 ///
-/// Copyright © 2016-2021 The Thingsboard Authors
+/// Copyright © 2016-2025 The Thingsboard Authors
 ///
 /// Licensed under the Apache License, Version 2.0 (the "License");
 /// you may not use this file except in compliance with the License.
@@ -15,7 +15,8 @@
 ///
 
 import {
-  AfterViewInit, ChangeDetectionStrategy, ChangeDetectorRef,
+  AfterViewInit,
+  ChangeDetectionStrategy,
   Component,
   DoCheck,
   Input,
@@ -40,11 +41,12 @@ import {
   DashboardCallbacks,
   DashboardWidget,
   DashboardWidgets,
-  IDashboardComponent
+  IDashboardComponent,
+  maxGridsterCol,
+  maxGridsterRow
 } from '../../models/dashboard-component.models';
 import { ReplaySubject, Subject, Subscription } from 'rxjs';
 import { WidgetLayout, WidgetLayouts } from '@shared/models/dashboard.models';
-import { DialogService } from '@core/services/dialog.service';
 import { animatedScroll, deepClone, isDefined } from '@app/core/utils';
 import { BreakpointObserver } from '@angular/cdk/layout';
 import { MediaBreakpoints } from '@shared/models/constants';
@@ -52,10 +54,13 @@ import { IAliasController, IStateController } from '@app/core/api/widget-api.mod
 import { Widget, WidgetPosition } from '@app/shared/models/widget.models';
 import { MatMenuTrigger } from '@angular/material/menu';
 import { SafeStyle } from '@angular/platform-browser';
-import { distinct } from 'rxjs/operators';
-import { ResizeObserver } from '@juggle/resize-observer';
+import { distinct, take } from 'rxjs/operators';
 import { UtilsService } from '@core/services/utils.service';
 import { WidgetComponentAction, WidgetComponentActionType } from '@home/components/widget/widget-container.component';
+import { TbPopoverComponent } from '@shared/components/popover.component';
+import { displayGrids } from 'angular-gridster2/lib/gridsterConfig.interface';
+import { coerceBoolean } from '@shared/decorators/coercion';
+import { TbContextMenuEvent } from '@shared/models/jquery-event.models';
 
 @Component({
   selector: 'tb-dashboard',
@@ -86,10 +91,37 @@ export class DashboardComponent extends PageComponent implements IDashboardCompo
   columns: number;
 
   @Input()
+  @coerceBoolean()
+  setGridSize = false;
+
+  @Input()
   margin: number;
 
   @Input()
+  outerMargin: boolean;
+
+  @Input()
+  displayGrid: displayGrids = 'onDrag&Resize';
+
+  @Input()
+  gridType: GridType;
+
+  @Input()
+  @coerceBoolean()
+  centerVertical = false;
+
+  @Input()
+  @coerceBoolean()
+  centerHorizontal = false;
+
+  @Input()
   isEdit: boolean;
+
+  @Input()
+  isEditingWidget: boolean;
+
+  @Input()
+  isPreview: boolean;
 
   @Input()
   autofillHeight: boolean;
@@ -133,6 +165,12 @@ export class DashboardComponent extends PageComponent implements IDashboardCompo
   @Input()
   dashboardTimewindow: Timewindow;
 
+  @Input()
+  parentDashboard?: IDashboardComponent = null;
+
+  @Input()
+  popoverComponent?: TbPopoverComponent = null;
+
   dashboardTimewindowChangedSubject: Subject<Timewindow> = new ReplaySubject<Timewindow>();
 
   dashboardTimewindowChanged = this.dashboardTimewindowChangedSubject.asObservable().pipe(
@@ -152,18 +190,16 @@ export class DashboardComponent extends PageComponent implements IDashboardCompo
 
   dashboardMenuPosition = { x: '0px', y: '0px' };
 
-  dashboardContextMenuEvent: MouseEvent;
+  dashboardContextMenuEvent: TbContextMenuEvent;
 
   @ViewChild('widgetMenuTrigger', {static: true}) widgetMenuTrigger: MatMenuTrigger;
 
   widgetMenuPosition = { x: '0px', y: '0px' };
 
-  widgetContextMenuEvent: MouseEvent;
+  widgetContextMenuEvent: TbContextMenuEvent;
 
   dashboardWidgets = new DashboardWidgets(this,
-    this.differs.find([]).create<Widget>((index, item) => {
-      return item;
-    }),
+    this.differs.find([]).create<Widget>((_, item) => item),
     this.kvDiffers.find([]).create<string, WidgetLayout>()
   );
 
@@ -176,53 +212,67 @@ export class DashboardComponent extends PageComponent implements IDashboardCompo
   constructor(protected store: Store<AppState>,
               public utils: UtilsService,
               private timeService: TimeService,
-              private dialogService: DialogService,
               private breakpointObserver: BreakpointObserver,
               private differs: IterableDiffers,
               private kvDiffers: KeyValueDiffers,
-              private cd: ChangeDetectorRef,
               private ngZone: NgZone) {
     super(store);
     this.authUser = getCurrentAuthUser(store);
   }
 
   ngOnInit(): void {
+    this.dashboardWidgets.parentDashboard = this.parentDashboard;
+    this.dashboardWidgets.popoverComponent = this.popoverComponent;
     if (!this.dashboardTimewindow) {
       this.dashboardTimewindow = this.timeService.defaultTimewindow();
     }
     this.gridsterOpts = {
-      gridType: GridType.ScrollVertical,
+      gridType: this.gridType || GridType.ScrollVertical,
       keepFixedHeightInMobile: true,
       disableWarnings: false,
       disableAutoPositionOnConflict: false,
       pushItems: false,
       swap: false,
-      maxRows: 100,
+      maxRows: maxGridsterRow,
       minCols: this.columns ? this.columns : 24,
-      maxCols: 3000,
+      setGridSize: this.setGridSize,
+      maxCols: maxGridsterCol,
       maxItemCols: 1000,
       maxItemRows: 1000,
       maxItemArea: 1000000,
-      outerMargin: true,
+      outerMargin: isDefined(this.outerMargin) ? this.outerMargin : true,
       margin: isDefined(this.margin) ? this.margin : 10,
       minItemCols: 1,
       minItemRows: 1,
       defaultItemCols: 8,
       defaultItemRows: 6,
-      resizable: {enabled: this.isEdit},
-      draggable: {enabled: this.isEdit},
-      itemChangeCallback: item => this.dashboardWidgets.sortWidgets(),
-      itemInitCallback: (item, itemComponent) => {
+      displayGrid: this.displayGrid,
+      useTransformPositioning: false,
+      resizable: {
+        enabled: this.isEdit && !this.isEditingWidget,
+        delayStart: 50,
+        stop: (_, itemComponent) => {(itemComponent.item as DashboardWidget).updatePosition(itemComponent.$item.x, itemComponent.$item.y);}
+      },
+      draggable: {
+        enabled: this.isEdit && !this.isEditingWidget,
+        delayStart: 100,
+        stop: (_, itemComponent) => {
+          (itemComponent.item as DashboardWidget).updatePosition(itemComponent.$item.x, itemComponent.$item.y);
+          this.notifyGridsterOptionsChanged();
+        }
+      },
+      itemChangeCallback: () => this.dashboardWidgets.sortWidgets(),
+      itemInitCallback: (_, itemComponent) => {
         (itemComponent.item as DashboardWidget).gridsterItemComponent = itemComponent;
       }
     };
 
-    this.updateMobileOpts();
+    this.updateGridOpts();
 
     this.breakpointObserverSubscription = this.breakpointObserver
       .observe(MediaBreakpoints['gt-sm']).subscribe(
       () => {
-        this.updateMobileOpts();
+        this.updateGridOpts();
         this.notifyGridsterOptionsChanged();
       }
     );
@@ -238,6 +288,7 @@ export class DashboardComponent extends PageComponent implements IDashboardCompo
     if (this.breakpointObserverSubscription) {
       this.breakpointObserverSubscription.unsubscribe();
     }
+    this.dashboardTimewindowChangedSubject.complete();
     this.gridster = null;
   }
 
@@ -248,20 +299,24 @@ export class DashboardComponent extends PageComponent implements IDashboardCompo
   }
 
   ngOnChanges(changes: SimpleChanges): void {
-    let updateMobileOpts = false;
-    let updateLayoutOpts = false;
+    let updateGridOpts = false;
+    let updateColumnOpts = false;
     let updateEditingOpts = false;
+    let updateDisplayGridOpts = false;
     let updateWidgets = false;
     let updateDashboardTimewindow = false;
     for (const propName of Object.keys(changes)) {
       const change = changes[propName];
       if (!change.firstChange && change.currentValue !== change.previousValue) {
-        if (['isMobile', 'isMobileDisabled', 'autofillHeight', 'mobileAutofillHeight', 'mobileRowHeight'].includes(propName)) {
-          updateMobileOpts = true;
-        } else if (['margin', 'columns'].includes(propName)) {
-          updateLayoutOpts = true;
-        } else if (propName === 'isEdit') {
+        if (['isMobile', 'isMobileDisabled', 'autofillHeight', 'mobileAutofillHeight',
+              'mobileRowHeight', 'colWidthInteger'].includes(propName)) {
+          updateGridOpts = true;
+        } else if (['outerMargin', 'margin', 'columns'].includes(propName)) {
+          updateColumnOpts = true;
+        } else if (['isEdit', 'isEditingWidget'].includes(propName)) {
           updateEditingOpts = true;
+        } else if (propName === 'displayGrid') {
+          updateDisplayGridOpts = true;
         } else if (['widgets', 'widgetLayouts'].includes(propName)) {
           updateWidgets = true;
         } else if (propName === 'dashboardTimewindow') {
@@ -275,16 +330,19 @@ export class DashboardComponent extends PageComponent implements IDashboardCompo
       this.dashboardTimewindowChangedSubject.next(this.dashboardTimewindow);
     }
 
-    if (updateMobileOpts) {
-      this.updateMobileOpts();
+    if (updateColumnOpts) {
+      this.updateColumnOpts();
     }
-    if (updateLayoutOpts) {
-      this.updateLayoutOpts();
+    if (updateGridOpts) {
+      this.updateGridOpts();
     }
     if (updateEditingOpts) {
       this.updateEditingOpts();
     }
-    if (updateMobileOpts || updateLayoutOpts || updateEditingOpts) {
+    if (updateDisplayGridOpts) {
+      this.updateDisplayGridOpts();
+    }
+    if (updateGridOpts || updateColumnOpts || updateEditingOpts || updateDisplayGridOpts) {
       this.notifyGridsterOptionsChanged();
     }
   }
@@ -300,9 +358,11 @@ export class DashboardComponent extends PageComponent implements IDashboardCompo
 
   ngAfterViewInit(): void {
     this.gridsterResize$ = new ResizeObserver(() => {
-      this.onGridsterParentResize();
+      this.ngZone.run(() => {
+        this.onGridsterParentResize();
+      });
     });
-    this.gridsterResize$.observe(this.gridster.el);
+    this.gridsterResize$.observe(this.gridster.el.parentElement);
   }
 
   onUpdateTimewindow(startTimeMs: number, endTimeMs: number, interval?: number, persist?: boolean): void {
@@ -334,7 +394,16 @@ export class DashboardComponent extends PageComponent implements IDashboardCompo
     }
   }
 
-  openDashboardContextMenu($event: MouseEvent) {
+  onDashboardMouseDown($event: MouseEvent) {
+    if (this.callbacks && this.callbacks.onDashboardMouseDown) {
+      if ($event && this.isEdit) {
+        $event.stopPropagation();
+      }
+      this.callbacks.onDashboardMouseDown($event);
+    }
+  }
+
+  openDashboardContextMenu($event: TbContextMenuEvent) {
     if (this.callbacks && this.callbacks.prepareDashboardContextMenu) {
       const items = this.callbacks.prepareDashboardContextMenu($event);
       if (items && items.length) {
@@ -349,9 +418,9 @@ export class DashboardComponent extends PageComponent implements IDashboardCompo
     }
   }
 
-  private openWidgetContextMenu($event: MouseEvent, widget: DashboardWidget) {
+  private openWidgetContextMenu($event: TbContextMenuEvent, widget: DashboardWidget) {
     if (this.callbacks && this.callbacks.prepareWidgetContextMenu) {
-      const items = this.callbacks.prepareWidgetContextMenu($event, widget.widget);
+      const items = this.callbacks.prepareWidgetContextMenu($event, widget.widget, widget.isReference);
       if (items && items.length) {
         $event.preventDefault();
         $event.stopPropagation();
@@ -389,6 +458,9 @@ export class DashboardComponent extends PageComponent implements IDashboardCompo
       case WidgetComponentActionType.REMOVE:
         this.removeWidget($event, widget);
         break;
+      case WidgetComponentActionType.REPLACE_REFERENCE_WITH_WIDGET_COPY:
+        this.replaceReferenceWithWidgetCopy($event, widget);
+        break;
     }
   }
 
@@ -413,12 +485,25 @@ export class DashboardComponent extends PageComponent implements IDashboardCompo
     }
   }
 
+  private replaceReferenceWithWidgetCopy($event: Event, widget: DashboardWidget) {
+    if ($event) {
+      $event.stopPropagation();
+    }
+    if (this.isEditActionEnabled && this.callbacks && this.callbacks.replaceReferenceWithWidgetCopy) {
+      this.callbacks.replaceReferenceWithWidgetCopy($event, widget.widget);
+    }
+  }
+
   private exportWidget($event: Event, widget: DashboardWidget) {
     if ($event) {
       $event.stopPropagation();
     }
     if (this.isExportActionEnabled && this.callbacks && this.callbacks.onExportWidget) {
-      this.callbacks.onExportWidget($event, widget.widget);
+      widget.title$.pipe(
+        take(1)
+      ).subscribe((widgetTitle) => {
+        this.callbacks.onExportWidget($event, widget.widget, widgetTitle);
+      });
     }
   }
 
@@ -450,7 +535,7 @@ export class DashboardComponent extends PageComponent implements IDashboardCompo
     return dashboardWidget ? dashboardWidget.widget : null;
   }
 
-  getEventGridPosition(event: Event): WidgetPosition {
+  getEventGridPosition(event: TbContextMenuEvent | KeyboardEvent): WidgetPosition {
     const pos: WidgetPosition = {
       row: 0,
       column: 0
@@ -458,7 +543,7 @@ export class DashboardComponent extends PageComponent implements IDashboardCompo
     const parentElement = $(this.gridster.el);
     let pageX = 0;
     let pageY = 0;
-    if (event instanceof MouseEvent) {
+    if ('pageX' in event && 'pageY' in event) {
       pageX = event.pageX;
       pageY = event.pageY;
     }
@@ -484,7 +569,7 @@ export class DashboardComponent extends PageComponent implements IDashboardCompo
     widget.gridsterItemComponent$().subscribe((gridsterItem) => {
       const gridsterItemElement = gridsterItem.el as HTMLElement;
       const offset = (parentElement.clientHeight - gridsterItemElement.clientHeight) / 2;
-      let scrollTop;
+      let scrollTop: number;
       if (this.isMobileSize) {
         scrollTop = gridsterItemElement.offsetTop;
       } else {
@@ -497,38 +582,50 @@ export class DashboardComponent extends PageComponent implements IDashboardCompo
     });
   }
 
-  private updateMobileOpts(parentHeight?: number) {
-    this.isMobileSize = this.checkIsMobileSize();
-    const autofillHeight = this.isAutofillHeight();
-    if (autofillHeight) {
-      this.gridsterOpts.gridType = this.isMobileSize ? GridType.Fixed : GridType.Fit;
-    } else {
-      this.gridsterOpts.gridType = this.isMobileSize ? GridType.Fixed : GridType.ScrollVertical;
-    }
-    const mobileBreakPoint = this.isMobileSize ? 20000 : 0;
-    this.gridsterOpts.mobileBreakpoint = mobileBreakPoint;
-    const rowSize = this.detectRowSize(this.isMobileSize, autofillHeight, parentHeight);
-    if (this.gridsterOpts.fixedRowHeight !== rowSize) {
-      this.gridsterOpts.fixedRowHeight = rowSize;
-    }
-  }
-
   private onGridsterParentResize() {
     const parentHeight = this.gridster.el.offsetHeight;
     if (this.isMobileSize && this.mobileAutofillHeight && parentHeight) {
-      this.updateMobileOpts(parentHeight);
+      this.updateGridOpts(parentHeight);
     }
     this.notifyGridsterOptionsChanged();
   }
 
-  private updateLayoutOpts() {
+  private updateGridOpts(parentHeight?: number) {
+    let updateWidgetRowsAndSort = false;
+    const isMobileSize = this.checkIsMobileSize();
+    if (this.isMobileSize !== isMobileSize) {
+      this.isMobileSize = isMobileSize;
+      updateWidgetRowsAndSort = true;
+    }
+    const autofillHeight = this.isAutofillHeight();
+    if (autofillHeight) {
+      this.gridsterOpts.gridType = this.isMobileSize ? GridType.Fixed : GridType.Fit;
+    } else {
+      this.gridsterOpts.gridType = this.isMobileSize ? GridType.Fixed : this.gridType || GridType.ScrollVertical;
+    }
+    this.gridsterOpts.mobileBreakpoint = this.isMobileSize ? 20000 : 0;
+    const rowSize = this.detectRowSize(this.isMobileSize, autofillHeight, parentHeight);
+    if (this.gridsterOpts.fixedRowHeight !== rowSize) {
+      this.gridsterOpts.fixedRowHeight = rowSize;
+    }
+    if (updateWidgetRowsAndSort) {
+      this.dashboardWidgets.updateRowsAndSort();
+    }
+  }
+
+  private updateColumnOpts() {
     this.gridsterOpts.minCols = this.columns ? this.columns : 24;
+    this.gridsterOpts.outerMargin = isDefined(this.outerMargin) ? this.outerMargin : true;
     this.gridsterOpts.margin = isDefined(this.margin) ? this.margin : 10;
   }
 
   private updateEditingOpts() {
-    this.gridsterOpts.resizable.enabled = this.isEdit;
-    this.gridsterOpts.draggable.enabled = this.isEdit;
+    this.gridsterOpts.resizable.enabled = this.isEdit && !this.isEditingWidget;
+    this.gridsterOpts.draggable.enabled = this.isEdit && !this.isEditingWidget;
+  }
+
+  private updateDisplayGridOpts() {
+    this.gridsterOpts.displayGrid = this.displayGrid;
   }
 
   public notifyGridsterOptionsChanged() {
@@ -563,10 +660,11 @@ export class DashboardComponent extends PageComponent implements IDashboardCompo
       }
       if (parentHeight) {
         let totalRows = 0;
-        for (const widget of this.dashboardWidgets.dashboardWidgets) {
+        for (const widget of this.dashboardWidgets.activeDashboardWidgets) {
           totalRows += widget.rows;
         }
-        rowHeight = (parentHeight - this.gridsterOpts.margin * (this.dashboardWidgets.dashboardWidgets.length + 2)) / totalRows;
+        rowHeight = ( parentHeight - this.gridsterOpts.margin *
+          ( totalRows + (this.gridsterOpts.outerMargin ? 1 : -1) ) ) / totalRows;
       }
     }
     return rowHeight;

@@ -1,5 +1,5 @@
 /**
- * Copyright © 2016-2021 The Thingsboard Authors
+ * Copyright © 2016-2025 The Thingsboard Authors
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -16,17 +16,21 @@
 package org.thingsboard.server.dao.widget;
 
 import org.thingsboard.server.common.data.id.TenantId;
+import org.thingsboard.server.common.data.id.WidgetsBundleId;
 import org.thingsboard.server.common.data.page.PageData;
 import org.thingsboard.server.common.data.page.PageLink;
 import org.thingsboard.server.common.data.widget.WidgetsBundle;
+import org.thingsboard.server.common.data.widget.WidgetsBundleFilter;
 import org.thingsboard.server.dao.Dao;
+import org.thingsboard.server.dao.ExportableEntityDao;
+import org.thingsboard.server.dao.ImageContainerDao;
 
 import java.util.UUID;
 
 /**
  * The Interface WidgetsBundleDao.
  */
-public interface WidgetsBundleDao extends Dao<WidgetsBundle> {
+public interface WidgetsBundleDao extends Dao<WidgetsBundle>, ExportableEntityDao<WidgetsBundleId, WidgetsBundle>, ImageContainerDao<WidgetsBundle> {
 
     /**
      * Save or update widgets bundle object
@@ -52,7 +56,7 @@ public interface WidgetsBundleDao extends Dao<WidgetsBundle> {
      * @param pageLink the page link
      * @return the list of widgets bundles objects
      */
-    PageData<WidgetsBundle> findSystemWidgetsBundles(TenantId tenantId, PageLink pageLink);
+    PageData<WidgetsBundle> findSystemWidgetsBundles(WidgetsBundleFilter widgetsBundleFilter, PageLink pageLink);
 
     /**
      * Find tenant widgets bundles by tenantId and page link.
@@ -70,7 +74,18 @@ public interface WidgetsBundleDao extends Dao<WidgetsBundle> {
      * @param pageLink the page link
      * @return the list of widgets bundles objects
      */
-    PageData<WidgetsBundle> findAllTenantWidgetsBundlesByTenantId(UUID tenantId, PageLink pageLink);
+    PageData<WidgetsBundle> findAllTenantWidgetsBundlesByTenantId(WidgetsBundleFilter widgetsBundleFilter, PageLink pageLink);
+
+    /**
+     * Find all tenant widgets bundles (does not include system) by tenantId and page link.
+     *
+     * @param tenantId the tenantId
+     * @param pageLink the page link
+     * @return the list of widgets bundles objects
+     */
+    PageData<WidgetsBundle> findTenantWidgetsBundlesByTenantId(WidgetsBundleFilter widgetsBundleFilter, PageLink pageLink);
+
+    PageData<WidgetsBundle> findAllWidgetsBundles(PageLink pageLink);
 
 }
 

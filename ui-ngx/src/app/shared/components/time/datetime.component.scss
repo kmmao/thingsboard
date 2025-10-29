@@ -1,5 +1,5 @@
 /**
- * Copyright © 2016-2021 The Thingsboard Authors
+ * Copyright © 2016-2025 The Thingsboard Authors
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -13,22 +13,48 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
-:host ::ng-deep {
-  .mat-form-field-wrapper {
-    padding-bottom: 8px;
+@import '../../../../scss/constants';
+
+:host-context(.tb-form-row) {
+  :host {
+    display: flex;
   }
-  .mat-form-field-underline {
-    bottom: 8px;
-  }
-  .mat-form-field-infix {
-    width: auto;
-    min-width: 100px;
-  }
-  mat-form-field {
-    &.no-label {
-      .mat-form-field-infix {
-        border-top-width: 0.2em;
+  .mat-mdc-form-field {
+    &.tb-datetime-field {
+      width: 185px;
+      &.with-clear {
+        width: 225px;
       }
     }
+    &.tb-date-field {
+      width: 140px;
+      &.with-clear {
+        width: 180px;
+      }
+    }
+    &.tb-time-field {
+      width: 100px;
+      &.with-clear {
+        width: 140px;
+      }
+    }
+  }
+}
+
+:host-context(.tb-form-row.column-xs) {
+  @media #{$mat-xs} {
+    .mat-mdc-form-field {
+      &.tb-datetime-field, &.tb-date-field, &.tb-time-field {
+        width: auto;
+        flex: 1;
+      }
+    }
+  }
+}
+
+:host {
+  .mat-mdc-form-field-icon-suffix,
+  .mat-datetimepicker-toggle {
+    color: rgba(0, 0, 0, 0.38);
   }
 }

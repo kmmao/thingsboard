@@ -1,5 +1,5 @@
 ///
-/// Copyright © 2016-2021 The Thingsboard Authors
+/// Copyright © 2016-2025 The Thingsboard Authors
 ///
 /// Licensed under the Apache License, Version 2.0 (the "License");
 /// you may not use this file except in compliance with the License.
@@ -14,7 +14,7 @@
 /// limitations under the License.
 ///
 
-import { DataSetHolder, Datasource, DatasourceType, widgetType } from '@shared/models/widget.models';
+import { DataKey, DataSetHolder, Datasource, DatasourceType, widgetType } from '@shared/models/widget.models';
 import { SubscriptionTimewindow } from '@shared/models/time/time.models';
 import { EntityData, EntityDataPageLink, KeyFilter } from '@shared/models/query/query.models';
 import { emptyPageData, PageData } from '@shared/models/page/page-data';
@@ -28,9 +28,11 @@ import {
   SubscriptionDataKey
 } from '@core/api/entity-data-subscription';
 import { Observable, of } from 'rxjs';
+import { HttpClient } from '@angular/common/http';
 
 export interface EntityDataListener {
   subscriptionType: widgetType;
+  useTimewindow?: boolean;
   subscriptionTimewindow?: SubscriptionTimewindow;
   latestTsOffset?: number;
   configDatasource: Datasource;
@@ -38,7 +40,8 @@ export interface EntityDataListener {
   dataLoaded: (pageData: PageData<EntityData>,
                data: Array<Array<DataSetHolder>>,
                datasourceIndex: number, pageLink: EntityDataPageLink) => void;
-  dataUpdated: (data: DataSetHolder, datasourceIndex: number, dataIndex: number, dataKeyIndex: number, detectChanges: boolean) => void;
+  dataUpdated: (data: DataSetHolder, datasourceIndex: number, dataIndex: number, dataKeyIndex: number,
+                detectChanges: boolean, isLatest: boolean) => void;
   initialPageDataChanged?: (nextPageData: PageData<EntityData>) => void;
   forceReInit?: () => void;
   updateRealtimeSubscription?: () => SubscriptionTimewindow;
@@ -60,7 +63,8 @@ export interface EntityDataLoadResult {
 export class EntityDataService {
 
   constructor(private telemetryService: TelemetryWebsocketService,
-              private utils: UtilsService) {}
+              private utils: UtilsService,
+              private http: HttpClient) {}
 
   private static isUnresolvedDatasource(datasource: Datasource, pageLink: EntityDataPageLink): boolean {
     if (datasource.type === DatasourceType.entity) {
@@ -70,6 +74,21 @@ export class EntityDataService {
     } else {
       return false;
     }
+  }
+
+  private static toSubscriptionDataKey(dataKey: DataKey, latest: boolean): SubscriptionDataKey {
+    return {
+      name: dataKey.name,
+      type: dataKey.type,
+      aggregationType: dataKey.aggregationType,
+      comparisonEnabled: dataKey.comparisonEnabled,
+      timeForComparison: dataKey.timeForComparison,
+      comparisonCustomIntervalValue: dataKey.comparisonCustomIntervalValue,
+      comparisonResultType: dataKey.comparisonResultType,
+      funcBody: dataKey.funcBody,
+      postFuncBody: dataKey.postFuncBody,
+      latest
+    };
   }
 
   public prepareSubscription(listener: EntityDataListener,
@@ -86,15 +105,16 @@ export class EntityDataService {
     if (EntityDataService.isUnresolvedDatasource(datasource, datasource.pageLink)) {
       return of(null);
     }
-    listener.subscription = new EntityDataSubscription(listener, this.telemetryService, this.utils);
+    listener.subscription = new EntityDataSubscription(listener, this.telemetryService, this.utils, this.http);
     return listener.subscription.subscribe();
   }
 
   public startSubscription(listener: EntityDataListener) {
     if (listener.subscription) {
-      if (listener.subscriptionType === widgetType.timeseries) {
+      if (listener.useTimewindow) {
         listener.subscriptionOptions.subscriptionTimewindow = deepClone(listener.subscriptionTimewindow);
-      } else if (listener.subscriptionType === widgetType.latest) {
+      }
+      if (listener.subscriptionType === widgetType.timeseries || listener.subscriptionType === widgetType.latest) {
         listener.subscriptionOptions.latestTsOffset = listener.latestTsOffset;
       }
       listener.subscription.start();
@@ -119,10 +139,11 @@ export class EntityDataService {
         listener.configDatasourceIndex, listener.subscriptionOptions.pageLink);
       return of(null);
     }
-    listener.subscription = new EntityDataSubscription(listener, this.telemetryService, this.utils);
-    if (listener.subscriptionType === widgetType.timeseries) {
+    listener.subscription = new EntityDataSubscription(listener, this.telemetryService, this.utils, this.http);
+    if (listener.useTimewindow) {
       listener.subscriptionOptions.subscriptionTimewindow = deepClone(listener.subscriptionTimewindow);
-    } else if (listener.subscriptionType === widgetType.latest) {
+    }
+    if (listener.subscriptionType === widgetType.timeseries || listener.subscriptionType === widgetType.latest) {
       listener.subscriptionOptions.latestTsOffset = listener.latestTsOffset;
     }
     return listener.subscription.subscribe();
@@ -143,22 +164,23 @@ export class EntityDataService {
                                     ignoreDataUpdateOnIntervalTick: boolean): EntityDataSubscriptionOptions {
     const subscriptionDataKeys: Array<SubscriptionDataKey> = [];
     datasource.dataKeys.forEach((dataKey) => {
-      const subscriptionDataKey: SubscriptionDataKey = {
-        name: dataKey.name,
-        type: dataKey.type,
-        funcBody: dataKey.funcBody,
-        postFuncBody: dataKey.postFuncBody
-      };
-      subscriptionDataKeys.push(subscriptionDataKey);
+      subscriptionDataKeys.push(EntityDataService.toSubscriptionDataKey(dataKey, false));
     });
+    if (datasource.latestDataKeys) {
+      datasource.latestDataKeys.forEach((dataKey) => {
+        subscriptionDataKeys.push(EntityDataService.toSubscriptionDataKey(dataKey, true));
+      });
+    }
     const entityDataSubscriptionOptions: EntityDataSubscriptionOptions = {
       datasourceType: datasource.type,
       dataKeys: subscriptionDataKeys,
       type: subscriptionType
     };
     if (entityDataSubscriptionOptions.datasourceType === DatasourceType.entity ||
-      entityDataSubscriptionOptions.datasourceType === DatasourceType.entityCount) {
+      entityDataSubscriptionOptions.datasourceType === DatasourceType.entityCount ||
+      entityDataSubscriptionOptions.datasourceType === DatasourceType.alarmCount) {
       entityDataSubscriptionOptions.entityFilter = datasource.entityFilter;
+      entityDataSubscriptionOptions.alarmFilter = datasource.alarmFilter;
       entityDataSubscriptionOptions.keyFilters = keyFilters;
       entityDataSubscriptionOptions.additionalKeyFilters = additionalKeyFilters;
       if (entityDataSubscriptionOptions.datasourceType === DatasourceType.entity) {

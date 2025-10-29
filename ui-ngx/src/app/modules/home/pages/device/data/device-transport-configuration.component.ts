@@ -1,5 +1,5 @@
 ///
-/// Copyright © 2016-2021 The Thingsboard Authors
+/// Copyright © 2016-2025 The Thingsboard Authors
 ///
 /// Licensed under the Apache License, Version 2.0 (the "License");
 /// you may not use this file except in compliance with the License.
@@ -14,32 +14,45 @@
 /// limitations under the License.
 ///
 
-import { Component, forwardRef, Input, OnInit } from '@angular/core';
-import { ControlValueAccessor, FormBuilder, FormGroup, NG_VALUE_ACCESSOR, Validators } from '@angular/forms';
+import { Component, DestroyRef, forwardRef, Input, OnInit } from '@angular/core';
+import {
+  ControlValueAccessor,
+  NG_VALIDATORS,
+  NG_VALUE_ACCESSOR,
+  UntypedFormBuilder,
+  UntypedFormGroup,
+  ValidationErrors,
+  Validator,
+  Validators
+} from '@angular/forms';
 import { Store } from '@ngrx/store';
 import { AppState } from '@app/core/core.state';
 import { coerceBooleanProperty } from '@angular/cdk/coercion';
-import {
-  DeviceTransportConfiguration,
-  DeviceTransportType
-} from '@shared/models/device.models';
+import { DeviceTransportConfiguration, DeviceTransportType } from '@shared/models/device.models';
 import { deepClone } from '@core/utils';
+import { takeUntilDestroyed } from '@angular/core/rxjs-interop';
 
 @Component({
   selector: 'tb-device-transport-configuration',
   templateUrl: './device-transport-configuration.component.html',
   styleUrls: [],
-  providers: [{
-    provide: NG_VALUE_ACCESSOR,
-    useExisting: forwardRef(() => DeviceTransportConfigurationComponent),
-    multi: true
-  }]
+  providers: [
+    {
+      provide: NG_VALUE_ACCESSOR,
+      useExisting: forwardRef(() => DeviceTransportConfigurationComponent),
+      multi: true
+    },
+    {
+      provide: NG_VALIDATORS,
+      useExisting: forwardRef(() => DeviceTransportConfigurationComponent),
+      multi: true
+    }]
 })
-export class DeviceTransportConfigurationComponent implements ControlValueAccessor, OnInit {
+export class DeviceTransportConfigurationComponent implements ControlValueAccessor, OnInit, Validator {
 
   deviceTransportType = DeviceTransportType;
 
-  deviceTransportConfigurationFormGroup: FormGroup;
+  deviceTransportConfigurationFormGroup: UntypedFormGroup;
 
   private requiredValue: boolean;
   get required(): boolean {
@@ -58,7 +71,8 @@ export class DeviceTransportConfigurationComponent implements ControlValueAccess
   private propagateChange = (v: any) => { };
 
   constructor(private store: Store<AppState>,
-              private fb: FormBuilder) {
+              private fb: UntypedFormBuilder,
+              private destroyRef: DestroyRef) {
   }
 
   registerOnChange(fn: any): void {
@@ -72,7 +86,9 @@ export class DeviceTransportConfigurationComponent implements ControlValueAccess
     this.deviceTransportConfigurationFormGroup = this.fb.group({
       configuration: [null, Validators.required]
     });
-    this.deviceTransportConfigurationFormGroup.valueChanges.subscribe(() => {
+    this.deviceTransportConfigurationFormGroup.valueChanges.pipe(
+      takeUntilDestroyed(this.destroyRef)
+    ).subscribe(() => {
       this.updateModel();
     });
   }
@@ -93,6 +109,12 @@ export class DeviceTransportConfigurationComponent implements ControlValueAccess
       delete configuration.type;
     }
     this.deviceTransportConfigurationFormGroup.patchValue({configuration}, {emitEvent: false});
+  }
+
+  validate(): ValidationErrors | null {
+    return this.deviceTransportConfigurationFormGroup.valid ? null : {
+      deviceTransportConfiguration: false
+    };
   }
 
   private updateModel() {

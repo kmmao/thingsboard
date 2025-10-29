@@ -1,5 +1,5 @@
 /**
- * Copyright © 2016-2021 The Thingsboard Authors
+ * Copyright © 2016-2025 The Thingsboard Authors
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -16,30 +16,34 @@
 package org.thingsboard.server.service.state;
 
 import org.springframework.context.ApplicationListener;
-import org.thingsboard.server.common.data.Device;
 import org.thingsboard.server.common.data.id.DeviceId;
-import org.thingsboard.server.queue.discovery.event.PartitionChangeEvent;
-import org.thingsboard.server.gen.transport.TransportProtos;
+import org.thingsboard.server.common.data.id.TenantId;
 import org.thingsboard.server.common.msg.queue.TbCallback;
+import org.thingsboard.server.gen.transport.TransportProtos;
+import org.thingsboard.server.queue.discovery.event.PartitionChangeEvent;
 
 /**
  * Created by ashvayka on 01.05.18.
  */
 public interface DeviceStateService extends ApplicationListener<PartitionChangeEvent> {
 
-    void onDeviceAdded(Device device);
+    void onDeviceConnect(TenantId tenantId, DeviceId deviceId, long lastConnectTime);
 
-    void onDeviceUpdated(Device device);
+    default void onDeviceConnect(TenantId tenantId, DeviceId deviceId) {
+        onDeviceConnect(tenantId, deviceId, System.currentTimeMillis());
+    }
 
-    void onDeviceDeleted(Device device);
+    void onDeviceActivity(TenantId tenantId, DeviceId deviceId, long lastReportedActivityTime);
 
-    void onDeviceConnect(DeviceId deviceId);
+    void onDeviceDisconnect(TenantId tenantId, DeviceId deviceId, long lastDisconnectTime);
 
-    void onDeviceActivity(DeviceId deviceId, long lastReportedActivityTime);
+    default void onDeviceDisconnect(TenantId tenantId, DeviceId deviceId) {
+        onDeviceDisconnect(tenantId, deviceId, System.currentTimeMillis());
+    }
 
-    void onDeviceDisconnect(DeviceId deviceId);
+    void onDeviceInactivity(TenantId tenantId, DeviceId deviceId, long lastInactivityTime);
 
-    void onDeviceInactivityTimeoutUpdate(DeviceId deviceId, long inactivityTimeout);
+    void onDeviceInactivityTimeoutUpdate(TenantId tenantId, DeviceId deviceId, long inactivityTimeout);
 
     void onQueueMsg(TransportProtos.DeviceStateServiceMsgProto proto, TbCallback bytes);
 

@@ -1,5 +1,5 @@
 ///
-/// Copyright © 2016-2021 The Thingsboard Authors
+/// Copyright © 2016-2025 The Thingsboard Authors
 ///
 /// Licensed under the Apache License, Version 2.0 (the "License");
 /// you may not use this file except in compliance with the License.
@@ -15,11 +15,9 @@
 ///
 
 import {
-  AfterViewInit,
   ChangeDetectionStrategy,
   ChangeDetectorRef,
   Component,
-  ComponentFactoryResolver,
   ComponentRef,
   ElementRef,
   Inject,
@@ -29,22 +27,27 @@ import {
   OnChanges,
   OnDestroy,
   OnInit,
+  Optional,
+  Renderer2,
   SimpleChanges,
+  TemplateRef,
+  Type,
   ViewChild,
   ViewContainerRef,
   ViewEncapsulation
 } from '@angular/core';
 import { DashboardWidget } from '@home/models/dashboard-component.models';
 import {
-  defaultLegendConfig,
-  LegendConfig,
-  LegendData,
-  LegendPosition, MobileActionResult,
+  MobileImageResult,
   Widget,
+  WidgetAction,
   WidgetActionDescriptor,
   widgetActionSources,
   WidgetActionType,
-  WidgetComparisonSettings, WidgetMobileActionDescriptor, WidgetMobileActionType,
+  WidgetComparisonSettings,
+  WidgetHeaderActionButtonType,
+  WidgetMobileActionDescriptor,
+  WidgetMobileActionType,
   WidgetResource,
   widgetType,
   WidgetTypeParameters
@@ -52,15 +55,28 @@ import {
 import { PageComponent } from '@shared/components/page.component';
 import { Store } from '@ngrx/store';
 import { AppState } from '@core/core.state';
-import { WidgetService } from '@core/http/widget.service';
 import { UtilsService } from '@core/services/utils.service';
 import { forkJoin, Observable, of, ReplaySubject, Subscription, throwError } from 'rxjs';
-import { deepClone, insertVariable, isDefined, objToBase64, objToBase64URI, validateEntityId } from '@core/utils';
+import {
+  deepClone,
+  guid,
+  insertVariable,
+  isDefined,
+  isNotEmptyStr,
+  objToBase64,
+  objToBase64URI,
+  validateEntityId
+} from '@core/utils';
 import {
   IDynamicWidgetComponent,
+  ShowWidgetHeaderActionFunction,
+  updateEntityParams,
   WidgetContext,
+  widgetContextToken,
+  widgetErrorMessagesToken,
   WidgetHeaderAction,
   WidgetInfo,
+  widgetTitlePanelToken,
   WidgetTypeInstance
 } from '@home/models/widget-component.models';
 import {
@@ -76,7 +92,12 @@ import {
 import { EntityId } from '@shared/models/id/entity-id';
 import { ActivatedRoute, Router } from '@angular/router';
 import cssjs from '@core/css/css';
-import { ResourcesService } from '@core/services/resources.service';
+import {
+  flatModulesWithComponents,
+  ModulesWithComponents,
+  modulesWithComponentsToTypes,
+  ResourcesService
+} from '@core/services/resources.service';
 import { catchError, map, switchMap } from 'rxjs/operators';
 import { ActionNotificationShow } from '@core/notification/notification.actions';
 import { TimeService } from '@core/services/time.service';
@@ -85,20 +106,28 @@ import { ExceptionData } from '@shared/models/error.models';
 import { WidgetComponentService } from './widget-component.service';
 import { Timewindow } from '@shared/models/time/time.models';
 import { CancelAnimationFrame, RafService } from '@core/services/raf.service';
+import { UnitService } from '@core/services/unit.service';
 import { DashboardService } from '@core/http/dashboard.service';
 import { WidgetSubscription } from '@core/api/widget-subscription';
 import { EntityService } from '@core/http/entity.service';
 import { ServicesMap } from '@home/models/services.map';
-import { ResizeObserver } from '@juggle/resize-observer';
 import { EntityDataService } from '@core/api/entity-data.service';
 import { TranslateService } from '@ngx-translate/core';
 import { NotificationType } from '@core/notification/notification.models';
 import { AlarmDataService } from '@core/api/alarm-data.service';
-import { MatDialog } from '@angular/material/dialog';
+import { MatDialog, MatDialogRef } from '@angular/material/dialog';
 import { ComponentType } from '@angular/cdk/portal';
 import { EMBED_DASHBOARD_DIALOG_TOKEN } from '@home/components/widget/dialog/embed-dashboard-dialog-token';
 import { MobileService } from '@core/services/mobile.service';
-import { DialogService } from '@core/services/dialog.service';
+import { PopoverPlacement } from '@shared/components/popover.models';
+import { TbPopoverService } from '@shared/components/popover.service';
+import { DASHBOARD_PAGE_COMPONENT_TOKEN } from '@home/components/tokens';
+import { MODULES_MAP } from '@shared/models/constants';
+import { IModulesMap } from '@modules/common/modules-map.models';
+import { DashboardUtilsService } from '@core/services/dashboard-utils.service';
+import { CompiledTbFunction, compileTbFunction, isNotEmptyTbFunction } from '@shared/models/js-function.models';
+import { HttpClient } from '@angular/common/http';
+import { addDiagnosticChain } from '@angular/compiler-cli/src/ngtsc/diagnostics';
 
 @Component({
   selector: 'tb-widget',
@@ -107,10 +136,19 @@ import { DialogService } from '@core/services/dialog.service';
   encapsulation: ViewEncapsulation.None,
   changeDetection: ChangeDetectionStrategy.OnPush
 })
-export class WidgetComponent extends PageComponent implements OnInit, AfterViewInit, OnChanges, OnDestroy {
+export class WidgetComponent extends PageComponent implements OnInit, OnChanges, OnDestroy {
+
+  @Input()
+  widgetTitlePanel: TemplateRef<any>;
+
+  @Input()
+  widgetHeaderActionsPanel: TemplateRef<any>;
 
   @Input()
   isEdit: boolean;
+
+  @Input()
+  isPreview: boolean;
 
   @Input()
   isMobile: boolean;
@@ -118,9 +156,11 @@ export class WidgetComponent extends PageComponent implements OnInit, AfterViewI
   @Input()
   dashboardWidget: DashboardWidget;
 
+  @Input()
+  widget: Widget;
+
   @ViewChild('widgetContent', {read: ViewContainerRef, static: true}) widgetContentContainer: ViewContainerRef;
 
-  widget: Widget;
   widgetInfo: WidgetInfo;
   errorMessages: string[];
   widgetContext: WidgetContext;
@@ -130,13 +170,7 @@ export class WidgetComponent extends PageComponent implements OnInit, AfterViewI
   widgetErrorData: ExceptionData;
   loadingData: boolean;
   displayNoData = false;
-
-  displayLegend: boolean;
-  legendConfig: LegendConfig;
-  legendData: LegendData;
-  isLegendFirst: boolean;
-  legendContainerLayoutType: string;
-  legendStyle: {[klass: string]: any};
+  noDataDisplayMessageText: string;
 
   dynamicWidgetComponentRef: ComponentRef<IDynamicWidgetComponent>;
   dynamicWidgetComponent: IDynamicWidgetComponent;
@@ -148,6 +182,7 @@ export class WidgetComponent extends PageComponent implements OnInit, AfterViewI
   widgetSizeDetected = false;
   widgetInstanceInited = false;
   dataUpdatePending = false;
+  latestDataUpdatePending = false;
   pendingMessage: SubscriptionMessage;
 
   cafs: {[cafId: string]: CancelAnimationFrame} = {};
@@ -164,12 +199,14 @@ export class WidgetComponent extends PageComponent implements OnInit, AfterViewI
               private route: ActivatedRoute,
               private router: Router,
               private widgetComponentService: WidgetComponentService,
-              private componentFactoryResolver: ComponentFactoryResolver,
               private elementRef: ElementRef,
               private injector: Injector,
               private dialog: MatDialog,
+              private renderer: Renderer2,
+              private popoverService: TbPopoverService,
               @Inject(EMBED_DASHBOARD_DIALOG_TOKEN) private embedDashboardDialogComponent: ComponentType<any>,
-              private widgetService: WidgetService,
+              @Inject(DASHBOARD_PAGE_COMPONENT_TOKEN) private dashboardPageComponent: ComponentType<any>,
+              @Optional() @Inject(MODULES_MAP) private modulesMap: IModulesMap,
               private resources: ResourcesService,
               private timeService: TimeService,
               private deviceService: DeviceService,
@@ -179,11 +216,13 @@ export class WidgetComponent extends PageComponent implements OnInit, AfterViewI
               private alarmDataService: AlarmDataService,
               private translate: TranslateService,
               private utils: UtilsService,
+              private dashboardUtils: DashboardUtilsService,
               private mobileService: MobileService,
-              private dialogs: DialogService,
               private raf: RafService,
+              private unitService: UnitService,
               private ngZone: NgZone,
-              private cd: ChangeDetectorRef) {
+              private cd: ChangeDetectorRef,
+              private http: HttpClient) {
     super(store);
     this.cssParser.testMode = false;
   }
@@ -191,59 +230,6 @@ export class WidgetComponent extends PageComponent implements OnInit, AfterViewI
   ngOnInit(): void {
 
     this.loadingData = true;
-
-    this.widget = this.dashboardWidget.widget;
-
-    this.displayLegend = isDefined(this.widget.config.showLegend) ? this.widget.config.showLegend
-      : this.widget.type === widgetType.timeseries;
-
-    this.legendContainerLayoutType = 'column';
-
-    if (this.displayLegend) {
-      this.legendConfig = this.widget.config.legendConfig || defaultLegendConfig(this.widget.type);
-      this.legendData = {
-        keys: [],
-        data: []
-      };
-      if (this.legendConfig.position === LegendPosition.top ||
-        this.legendConfig.position === LegendPosition.bottom) {
-        this.legendContainerLayoutType = 'column';
-        this.isLegendFirst = this.legendConfig.position === LegendPosition.top;
-      } else {
-        this.legendContainerLayoutType = 'row';
-        this.isLegendFirst = this.legendConfig.position === LegendPosition.left;
-      }
-      switch (this.legendConfig.position) {
-        case LegendPosition.top:
-          this.legendStyle = {
-            paddingBottom: '8px',
-            maxHeight: '50%',
-            overflowY: 'auto'
-          };
-          break;
-        case LegendPosition.bottom:
-          this.legendStyle = {
-            paddingTop: '8px',
-            maxHeight: '50%',
-            overflowY: 'auto'
-          };
-          break;
-        case LegendPosition.left:
-          this.legendStyle = {
-            paddingRight: '0px',
-            maxWidth: '50%',
-            overflowY: 'auto'
-          };
-          break;
-        case LegendPosition.right:
-          this.legendStyle = {
-            paddingLeft: '0px',
-            maxWidth: '50%',
-            overflowY: 'auto'
-          };
-          break;
-      }
-    }
 
     const actionDescriptorsBySourceId: {[actionSourceId: string]: Array<WidgetActionDescriptor>} = {};
     if (this.widget.config.actions) {
@@ -265,7 +251,11 @@ export class WidgetComponent extends PageComponent implements OnInit, AfterViewI
     this.widgetContext.store = this.store;
     this.widgetContext.servicesMap = ServicesMap;
     this.widgetContext.isEdit = this.isEdit;
+    this.widgetContext.isPreview = this.isPreview;
     this.widgetContext.isMobile = this.isMobile;
+    this.widgetContext.toastTargetId = this.toastTargetId;
+    this.widgetContext.renderer = this.renderer;
+    this.widgetContext.widgetContentContainer = this.widgetContentContainer;
 
     this.widgetContext.subscriptionApi = {
       createSubscription: this.createSubscription.bind(this),
@@ -283,28 +273,68 @@ export class WidgetComponent extends PageComponent implements OnInit, AfterViewI
       actionDescriptorsBySourceId,
       getActionDescriptors: this.getActionDescriptors.bind(this),
       handleWidgetAction: this.handleWidgetAction.bind(this),
+      onWidgetAction: this.onWidgetAction.bind(this),
       elementClick: this.elementClick.bind(this),
-      getActiveEntityInfo: this.getActiveEntityInfo.bind(this)
+      cardClick: this.cardClick.bind(this),
+      click: this.click.bind(this),
+      getActiveEntityInfo: this.getActiveEntityInfo.bind(this),
+      openDashboardStateInSeparateDialog: this.openDashboardStateInSeparateDialog.bind(this),
+      openDashboardStateInPopover: this.openDashboardStateInPopover.bind(this),
+      placeMapItem: () => {}
     };
 
     this.widgetContext.customHeaderActions = [];
+
     const headerActionsDescriptors = this.getActionDescriptors(widgetActionSources.headerButton.value);
-    headerActionsDescriptors.forEach((descriptor) => {
-      const headerAction: WidgetHeaderAction = {
-        name: descriptor.name,
-        displayName: descriptor.displayName,
-        icon: descriptor.icon,
-        descriptor,
-        onAction: $event => {
-          const entityInfo = this.getActiveEntityInfo();
-          const entityId = entityInfo ? entityInfo.entityId : null;
-          const entityName = entityInfo ? entityInfo.entityName : null;
-          const entityLabel = entityInfo ? entityInfo.entityLabel : null;
-          this.handleWidgetAction($event, descriptor, entityId, entityName, null, entityLabel);
-        }
-      };
-      this.widgetContext.customHeaderActions.push(headerAction);
+
+    const customHeaderActions$ = headerActionsDescriptors.map((descriptor) => {
+      let useShowWidgetHeaderActionFunction = descriptor.useShowWidgetActionFunction || false;
+      let showWidgetHeaderActionFunction$: Observable<CompiledTbFunction<ShowWidgetHeaderActionFunction>>;
+      if (useShowWidgetHeaderActionFunction && isNotEmptyTbFunction(descriptor.showWidgetActionFunction)) {
+        showWidgetHeaderActionFunction$ = compileTbFunction(this.http, descriptor.showWidgetActionFunction, 'widgetContext', 'data');
+      } else {
+        showWidgetHeaderActionFunction$ = of(null);
+      }
+      return showWidgetHeaderActionFunction$.pipe(
+        catchError(() => { return of(null) }),
+        map(showWidgetHeaderActionFunction => {
+          if (!showWidgetHeaderActionFunction) {
+            useShowWidgetHeaderActionFunction = false;
+          }
+          const headerAction: WidgetHeaderAction = {
+            name: descriptor.name,
+            displayName: descriptor.displayName,
+            buttonType: descriptor.buttonType,
+            showIcon: descriptor.showIcon,
+            icon: descriptor.icon,
+            customButtonStyle: this.headerButtonStyle(
+              descriptor.buttonType,
+              descriptor.customButtonStyle,
+              descriptor.buttonColor,
+              descriptor.buttonFillColor,
+              descriptor.buttonBorderColor
+            ),
+            descriptor,
+            useShowWidgetHeaderActionFunction,
+            showWidgetHeaderActionFunction,
+            onAction: $event => {
+              const entityInfo = this.getActiveEntityInfo();
+              const entityId = entityInfo ? entityInfo.entityId : null;
+              const entityName = entityInfo ? entityInfo.entityName : null;
+              const entityLabel = entityInfo ? entityInfo.entityLabel : null;
+              this.handleWidgetAction($event, descriptor, entityId, entityName, null, entityLabel);
+            }
+          };
+          return headerAction;
+        })
+      );
     });
+
+    if (customHeaderActions$.length) {
+      forkJoin(customHeaderActions$).subscribe((customHeaderActions) => {
+        this.widgetContext.customHeaderActions.push(...customHeaderActions);
+      });
+    }
 
     this.subscriptionContext = new WidgetSubscriptionContext(this.widgetContext.dashboard);
     this.subscriptionContext.timeService = this.timeService;
@@ -313,27 +343,63 @@ export class WidgetComponent extends PageComponent implements OnInit, AfterViewI
     this.subscriptionContext.entityDataService = this.entityDataService;
     this.subscriptionContext.alarmDataService = this.alarmDataService;
     this.subscriptionContext.utils = this.utils;
+    this.subscriptionContext.dashboardUtils = this.dashboardUtils;
     this.subscriptionContext.raf = this.raf;
+    this.subscriptionContext.unitService = this.unitService;
     this.subscriptionContext.widgetUtils = this.widgetContext.utils;
     this.subscriptionContext.getServerTimeDiff = this.dashboardService.getServerTimeDiff.bind(this.dashboardService);
 
-    this.widgetComponentService.getWidgetInfo(this.widget.bundleAlias, this.widget.typeAlias, this.widget.isSystemType).subscribe(
-      (widgetInfo) => {
+    this.widgetComponentService.getWidgetInfo(this.widget.typeFullFqn).subscribe({
+      next: (widgetInfo) => {
         this.widgetInfo = widgetInfo;
         this.loadFromWidgetInfo();
       },
-      (errorData) => {
+      error: (errorData) => {
         this.widgetInfo = errorData.widgetInfo;
         this.errorMessages = errorData.errorMessages;
         this.loadFromWidgetInfo();
       }
-    );
-    setTimeout(() => {
-      this.dashboardWidget.updateWidgetParams();
-    }, 0);
+    });
+
+    const noDataDisplayMessage = this.widget.config.noDataDisplayMessage;
+    if (isNotEmptyStr(noDataDisplayMessage)) {
+      this.noDataDisplayMessageText = this.utils.customTranslation(noDataDisplayMessage, noDataDisplayMessage);
+    } else {
+      this.noDataDisplayMessageText = this.translate.instant('widget.no-data');
+    }
   }
 
-  ngAfterViewInit(): void {
+  headerButtonStyle(buttonType: WidgetHeaderActionButtonType = WidgetHeaderActionButtonType.icon,
+                    customButtonStyle:{[key: string]: string},
+                    buttonColor: string = this.widget.config.color,
+                    backgroundColor: string,
+                    borderColor: string) {
+    const buttonStyle = {};
+    switch (buttonType) {
+      case WidgetHeaderActionButtonType.basic:
+        buttonStyle['--mdc-text-button-label-text-color'] = buttonColor;
+        break;
+      case WidgetHeaderActionButtonType.raised:
+        buttonStyle['--mdc-protected-button-label-text-color'] = buttonColor;
+        buttonStyle['--mdc-protected-button-container-color'] = backgroundColor;
+        break;
+      case WidgetHeaderActionButtonType.stroked:
+        buttonStyle['--mdc-outlined-button-label-text-color'] = buttonColor;
+        buttonStyle['--mdc-outlined-button-outline-color'] = borderColor;
+        break;
+      case WidgetHeaderActionButtonType.flat:
+        buttonStyle['--mdc-filled-button-label-text-color'] = buttonColor;
+        buttonStyle['--mdc-filled-button-container-color'] = backgroundColor;
+        break;
+      case WidgetHeaderActionButtonType.miniFab:
+        buttonStyle['--mat-fab-small-foreground-color'] = buttonColor;
+        buttonStyle['--mdc-fab-small-container-color'] = backgroundColor;
+        break;
+      default:
+        buttonStyle['--mat-icon-color'] = buttonColor;
+        break;
+    }
+    return {...buttonStyle, ...customButtonStyle};
   }
 
   ngOnChanges(changes: SimpleChanges): void {
@@ -359,17 +425,17 @@ export class WidgetComponent extends PageComponent implements OnInit, AfterViewI
   }
 
   private displayWidgetInstance(): boolean {
-    if (this.widget.type !== widgetType.static) {
-      for (const id of Object.keys(this.widgetContext.subscriptions)) {
-        const subscription = this.widgetContext.subscriptions[id];
-        if (subscription.isDataResolved()) {
-          return true;
-        }
-      }
-      return false;
-    } else {
+    if (this.widget.type === widgetType.static || this.typeParameters?.processNoDataByWidget) {
       return true;
     }
+
+    for (const id of Object.keys(this.widgetContext.subscriptions)) {
+      const subscription = this.widgetContext.subscriptions[id];
+      if (subscription.isDataResolved()) {
+        return true;
+      }
+    }
+    return false;
   }
 
   private onDestroy() {
@@ -400,7 +466,7 @@ export class WidgetComponent extends PageComponent implements OnInit, AfterViewI
           this.handleWidgetException(e);
         }
       }
-      this.widgetContext.destroyed = true;
+      this.widgetContext.destroy();
       this.destroyDynamicWidgetComponent();
     }
   }
@@ -409,25 +475,22 @@ export class WidgetComponent extends PageComponent implements OnInit, AfterViewI
     for (const id of Object.keys(this.widgetContext.subscriptions)) {
       const subscription = this.widgetContext.subscriptions[id];
       if (!subscription.useDashboardTimewindow) {
-        subscription.updateTimewindowConfig(timewindow);
+        subscription.updateTimewindowConfig(subscription.onTimewindowChangeFunction(timewindow));
       }
     }
   }
 
-  public onLegendKeyHiddenChange(index: number) {
-    for (const id of Object.keys(this.widgetContext.subscriptions)) {
-      const subscription = this.widgetContext.subscriptions[id];
-      subscription.updateDataVisibility(index);
-    }
-  }
-
   private loadFromWidgetInfo() {
-    this.widgetContext.widgetNamespace = `widget-type-${(this.widget.isSystemType ? 'sys-' : '')}${this.widget.bundleAlias}-${this.widget.typeAlias}`;
+    this.widgetContext.widgetNamespace =
+      `widget-type-${this.widget.typeFullFqn.replace(/\./g, '-')}`;
     const elem = this.elementRef.nativeElement;
     elem.classList.add('tb-widget');
     elem.classList.add(this.widgetContext.widgetNamespace);
     this.widgetType = this.widgetInfo.widgetTypeFunction;
     this.typeParameters = this.widgetInfo.typeParameters;
+    this.widgetContext.embedTitlePanel = this.typeParameters.embedTitlePanel;
+    this.widgetContext.embedActionsPanel = this.typeParameters.embedActionsPanel;
+    this.widgetContext.overflowVisible = this.typeParameters.overflowVisible;
 
     if (!this.widgetType) {
       this.widgetTypeInstance = {};
@@ -445,6 +508,9 @@ export class WidgetComponent extends PageComponent implements OnInit, AfterViewI
     if (!this.widgetTypeInstance.onDataUpdated) {
       this.widgetTypeInstance.onDataUpdated = () => {};
     }
+    if (!this.widgetTypeInstance.onLatestDataUpdated) {
+      this.widgetTypeInstance.onLatestDataUpdated = () => {};
+    }
     if (!this.widgetTypeInstance.onResize) {
       this.widgetTypeInstance.onResize = () => {};
     }
@@ -458,14 +524,15 @@ export class WidgetComponent extends PageComponent implements OnInit, AfterViewI
       this.widgetTypeInstance.onDestroy = () => {};
     }
 
-    this.initialize().subscribe(
-      () => {
+    this.initialize().subscribe({
+      next: () => {
         this.onInit();
       },
-      (err) => {
+      error: () => {
+        this.widgetContext.inited = true;
         // console.log(err);
       }
-    );
+    });
   }
 
   private detectChanges(detectContainerChanges = false) {
@@ -494,6 +561,8 @@ export class WidgetComponent extends PageComponent implements OnInit, AfterViewI
     }
     if (!this.widgetContext.inited && this.isReady()) {
       this.widgetContext.inited = true;
+      this.widgetContext.destroyed = false;
+      this.dashboardWidget.updateWidgetParams();
       this.widgetContext.detectContainerChanges();
       if (this.cafs.init) {
         this.cafs.init();
@@ -506,7 +575,14 @@ export class WidgetComponent extends PageComponent implements OnInit, AfterViewI
             this.widgetInstanceInited = true;
             if (this.dataUpdatePending) {
               this.widgetTypeInstance.onDataUpdated();
+              setTimeout(() => {
+                this.dashboardWidget.updateParamsFromData(true);
+              }, 0);
               this.dataUpdatePending = false;
+            }
+            if (this.latestDataUpdatePending) {
+              this.widgetTypeInstance.onLatestDataUpdated();
+              this.latestDataUpdatePending = false;
             }
             if (this.pendingMessage) {
               this.displayMessage(this.pendingMessage.severity, this.pendingMessage.message);
@@ -544,7 +620,9 @@ export class WidgetComponent extends PageComponent implements OnInit, AfterViewI
           }
         });
       } else {
-        this.onInit(true);
+        this.ngZone.run(() => {
+          this.onInit(true);
+        });
       }
     }
   }
@@ -606,8 +684,8 @@ export class WidgetComponent extends PageComponent implements OnInit, AfterViewI
   private reInitImpl() {
     this.onDestroy();
     if (!this.typeParameters.useCustomDatasources) {
-      this.createDefaultSubscription().subscribe(
-        () => {
+      this.createDefaultSubscription().subscribe({
+        next: () => {
           if (this.destroyed) {
             this.onDestroy();
           } else {
@@ -617,7 +695,7 @@ export class WidgetComponent extends PageComponent implements OnInit, AfterViewI
             this.onInit();
           }
         },
-        () => {
+        error: () => {
           if (this.destroyed) {
             this.onDestroy();
           } else {
@@ -626,7 +704,7 @@ export class WidgetComponent extends PageComponent implements OnInit, AfterViewI
             this.onInit();
           }
         }
-      );
+      });
     } else {
       this.widgetContext.reset();
       this.subscriptionInited = true;
@@ -637,7 +715,7 @@ export class WidgetComponent extends PageComponent implements OnInit, AfterViewI
 
   private initialize(): Observable<any> {
 
-    const initSubject = new ReplaySubject();
+    const initSubject = new ReplaySubject<void>();
 
     this.rxSubscriptions.push(this.widgetContext.aliasController.entityAliasesChanged.subscribe(
       (aliasIds) => {
@@ -676,24 +754,32 @@ export class WidgetComponent extends PageComponent implements OnInit, AfterViewI
       }
     ));
     if (!this.typeParameters.useCustomDatasources) {
-      this.createDefaultSubscription().subscribe(
-        () => {
+      this.createDefaultSubscription().subscribe({
+        next: () => {
           this.subscriptionInited = true;
-          this.configureDynamicWidgetComponent();
-          initSubject.next();
-          initSubject.complete();
+          try {
+            this.configureDynamicWidgetComponent();
+            initSubject.next();
+            initSubject.complete();
+          } catch (err) {
+            initSubject.error(err);
+          }
         },
-        (err) => {
+        error: (err) => {
           this.subscriptionInited = true;
           initSubject.error(err);
         }
-      );
+      });
     } else {
       this.loadingData = false;
       this.subscriptionInited = true;
-      this.configureDynamicWidgetComponent();
-      initSubject.next();
-      initSubject.complete();
+      try {
+        this.configureDynamicWidgetComponent();
+        initSubject.next();
+        initSubject.complete();
+      }  catch (err) {
+        initSubject.error(err);
+      }
     }
     return initSubject.asObservable();
   }
@@ -708,7 +794,7 @@ export class WidgetComponent extends PageComponent implements OnInit, AfterViewI
     }
   }
 
-  private handleWidgetException(e) {
+  private handleWidgetException(e: any) {
     console.error(e);
     this.widgetErrorData = this.utils.processWidgetException(e);
     this.detectChanges();
@@ -728,12 +814,16 @@ export class WidgetComponent extends PageComponent implements OnInit, AfterViewI
         {
           providers: [
             {
-              provide: 'widgetContext',
+              provide: widgetContextToken,
               useValue: this.widgetContext
             },
             {
-              provide: 'errorMessages',
+              provide: widgetErrorMessagesToken,
               useValue: this.errorMessages
+            },
+            {
+              provide: widgetTitlePanelToken,
+              useValue: this.widgetTitlePanel
             }
           ],
           parent: this.injector
@@ -744,22 +834,24 @@ export class WidgetComponent extends PageComponent implements OnInit, AfterViewI
       this.widgetContext.$containerParent = $(containerElement);
 
       try {
-        this.dynamicWidgetComponentRef = this.widgetContentContainer.createComponent(this.widgetInfo.componentFactory, 0, injector);
+        this.dynamicWidgetComponentRef = this.widgetContentContainer.createComponent(this.widgetInfo.componentType,
+          {index: 0, injector});
         this.cd.detectChanges();
       } catch (e) {
-        console.error(e);
         if (this.dynamicWidgetComponentRef) {
           this.dynamicWidgetComponentRef.destroy();
           this.dynamicWidgetComponentRef = null;
         }
         this.widgetContentContainer.clear();
+        this.handleWidgetException(e);
+        this.widgetComponentService.clearWidgetInfo(this.widgetInfo);
+        throw e;
       }
 
       if (this.dynamicWidgetComponentRef) {
         this.dynamicWidgetComponent = this.dynamicWidgetComponentRef.instance;
         this.widgetContext.$container = $(this.dynamicWidgetComponentRef.location.nativeElement);
         this.widgetContext.$container.css('display', 'block');
-        this.widgetContext.$container.css('user-select', 'none');
         this.widgetContext.$container.attr('id', 'container');
         if (this.widgetSizeDetected) {
           this.widgetContext.$container.css('height', this.widgetContext.height + 'px');
@@ -777,8 +869,8 @@ export class WidgetComponent extends PageComponent implements OnInit, AfterViewI
     const createSubscriptionSubject = new ReplaySubject<IWidgetSubscription>();
     options.dashboardTimewindow = this.widgetContext.dashboardTimewindow;
     const subscription: IWidgetSubscription = new WidgetSubscription(this.subscriptionContext, options);
-    subscription.init$.subscribe(
-      () => {
+    subscription.init$.subscribe({
+      next: () => {
         this.widgetContext.subscriptions[subscription.id] = subscription;
         if (subscribe) {
           subscription.subscribe();
@@ -786,10 +878,10 @@ export class WidgetComponent extends PageComponent implements OnInit, AfterViewI
         createSubscriptionSubject.next(subscription);
         createSubscriptionSubject.complete();
       },
-      (err) => {
+      error: (err) => {
         createSubscriptionSubject.error(err);
       }
-    );
+    });
     return createSubscriptionSubject.asObservable();
   }
 
@@ -811,18 +903,15 @@ export class WidgetComponent extends PageComponent implements OnInit, AfterViewI
     } else {
       options.datasources = this.entityService.createDatasourcesFromSubscriptionsInfo(subscriptionsInfo);
     }
-    this.createSubscription(options, subscribe).subscribe(
-      (subscription) => {
-        if (useDefaultComponents) {
-          this.defaultSubscriptionOptions(subscription, options);
-        }
+    this.createSubscription(options, subscribe).subscribe({
+      next: (subscription) => {
         createSubscriptionSubject.next(subscription);
         createSubscriptionSubject.complete();
       },
-      (err) => {
+      error: (err) => {
         createSubscriptionSubject.error(err);
       }
-    );
+    });
     return createSubscriptionSubject.asObservable();
   }
 
@@ -833,8 +922,8 @@ export class WidgetComponent extends PageComponent implements OnInit, AfterViewI
       ? this.widget.config.displayTimewindow : !options.useDashboardTimewindow;
     options.timeWindowConfig = options.useDashboardTimewindow ? this.widgetContext.dashboardTimewindow : this.widget.config.timewindow;
     options.legendConfig = null;
-    if (this.displayLegend) {
-      options.legendConfig = this.legendConfig;
+    if (this.widget.config.settings.showLegend === true) {
+      options.legendConfig = this.widget.config.settings.legendConfig;
     }
     options.decimals = this.widgetContext.decimals;
     options.units = this.widgetContext.units;
@@ -844,16 +933,33 @@ export class WidgetComponent extends PageComponent implements OnInit, AfterViewI
           if (this.displayWidgetInstance()) {
             if (this.widgetInstanceInited) {
               this.widgetTypeInstance.onDataUpdated();
+              setTimeout(() => {
+                this.dashboardWidget.updateParamsFromData(true);
+              }, 0);
             } else {
               this.dataUpdatePending = true;
             }
           }
-        } catch (e){}
+        } catch (e){/**/}
       },
-      onDataUpdateError: (subscription, e) => {
+      onLatestDataUpdated: () => {
+        try {
+          if (this.displayWidgetInstance()) {
+            if (this.widgetInstanceInited) {
+              this.widgetTypeInstance.onLatestDataUpdated();
+            } else {
+              this.latestDataUpdatePending = true;
+            }
+          }
+        } catch (e){/**/}
+      },
+      onDataUpdateError: (_subscription, e) => {
         this.handleWidgetException(e);
       },
-      onSubscriptionMessage: (subscription, message) => {
+      onLatestDataUpdateError: (_subscription, e) => {
+        this.handleWidgetException(e);
+      },
+      onSubscriptionMessage: (_subscription, message) => {
         if (this.displayWidgetInstance()) {
           if (this.widgetInstanceInited) {
             this.displayMessage(message.severity, message.message);
@@ -862,7 +968,7 @@ export class WidgetComponent extends PageComponent implements OnInit, AfterViewI
           }
         }
       },
-      onInitialPageDataChanged: (subscription, nextPageData) => {
+      onInitialPageDataChanged: (_subscription, _nextPageData) => {
         this.reInit();
       },
       forceReInit: () => {
@@ -874,41 +980,37 @@ export class WidgetComponent extends PageComponent implements OnInit, AfterViewI
           this.detectChanges();
         }
       },
-      legendDataUpdated: (subscription, detectChanges) => {
+      legendDataUpdated: (_subscription, detectChanges) => {
         if (detectChanges) {
           this.detectChanges();
         }
       },
-      timeWindowUpdated: (subscription, timeWindowConfig) => {
+      timeWindowUpdated: (_subscription, timeWindowConfig) => {
         this.ngZone.run(() => {
           this.widget.config.timewindow = timeWindowConfig;
           this.detectChanges(true);
         });
       }
     };
-
-  }
-
-  private defaultSubscriptionOptions(subscription: IWidgetSubscription, options: WidgetSubscriptionOptions) {
-    if (this.displayLegend) {
-      this.legendData = subscription.legendData;
-    }
   }
 
   private createDefaultSubscription(): Observable<any> {
-    const createSubscriptionSubject = new ReplaySubject();
+    const createSubscriptionSubject = new ReplaySubject<void>();
     let options: WidgetSubscriptionOptions;
     if (this.widget.type !== widgetType.rpc && this.widget.type !== widgetType.static) {
       const comparisonSettings: WidgetComparisonSettings = this.widgetContext.settings;
       options = {
         type: this.widget.type,
         stateData: this.typeParameters.stateData,
+        datasourcesOptional: this.typeParameters.datasourcesOptional,
         hasDataPageLink: this.typeParameters.hasDataPageLink,
         singleEntity: this.typeParameters.singleEntity,
         warnOnPageDataOverflow: this.typeParameters.warnOnPageDataOverflow,
         ignoreDataUpdateOnIntervalTick: this.typeParameters.ignoreDataUpdateOnIntervalTick,
         comparisonEnabled: comparisonSettings.comparisonEnabled,
-        timeForComparison: comparisonSettings.timeForComparison
+        timeForComparison: comparisonSettings.timeForComparison,
+        comparisonCustomIntervalValue: comparisonSettings.comparisonCustomIntervalValue,
+        pageSize: this.widget.config.pageSize
       };
       if (this.widget.type === widgetType.alarm) {
         options.alarmSource = deepClone(this.widget.config.alarmSource);
@@ -918,28 +1020,32 @@ export class WidgetComponent extends PageComponent implements OnInit, AfterViewI
 
       this.defaultComponentsOptions(options);
 
-      this.createSubscription(options).subscribe(
-        (subscription) => {
-          this.defaultSubscriptionOptions(subscription, options);
+      this.createSubscription(options).subscribe({
+        next: (subscription) => {
 
           // backward compatibility
           this.widgetContext.datasources = subscription.datasources;
           this.widgetContext.data = subscription.data;
+          this.widgetContext.latestData = subscription.latestData;
           this.widgetContext.hiddenData = subscription.hiddenData;
           this.widgetContext.timeWindow = subscription.timeWindow;
           this.widgetContext.defaultSubscription = subscription;
-          createSubscriptionSubject.next();
-          createSubscriptionSubject.complete();
+          this.ngZone.run(() => {
+            createSubscriptionSubject.next();
+            createSubscriptionSubject.complete();
+          });
         },
-        (err) => {
-          createSubscriptionSubject.error(err);
+        error: (err) => {
+          this.ngZone.run(() => {
+            createSubscriptionSubject.error(err);
+          });
         }
-      );
+      });
     } else if (this.widget.type === widgetType.rpc) {
       this.loadingData = false;
       options = {
         type: this.widget.type,
-        targetDeviceAliasIds: this.widget.config.targetDeviceAliasIds
+        targetDevice: this.widget.config.targetDevice
       };
       options.callbacks = {
         rpcStateChanged: (subscription) => {
@@ -954,7 +1060,9 @@ export class WidgetComponent extends PageComponent implements OnInit, AfterViewI
             this.dynamicWidgetComponent.executingRpcRequest = subscription.executingRpcRequest;
             this.dynamicWidgetComponent.rpcErrorText = subscription.rpcErrorText;
             this.dynamicWidgetComponent.rpcRejection = subscription.rpcRejection;
-            this.clearMessage();
+            if (this.typeParameters.displayRpcMessageToast) {
+              this.clearMessage();
+            }
             this.detectChanges();
           }
         },
@@ -963,31 +1071,37 @@ export class WidgetComponent extends PageComponent implements OnInit, AfterViewI
             this.dynamicWidgetComponent.executingRpcRequest = subscription.executingRpcRequest;
             this.dynamicWidgetComponent.rpcErrorText = subscription.rpcErrorText;
             this.dynamicWidgetComponent.rpcRejection = subscription.rpcRejection;
-            if (subscription.rpcErrorText) {
+            if (subscription.rpcErrorText && this.typeParameters.displayRpcMessageToast) {
               this.displayMessage('error', subscription.rpcErrorText);
             }
             this.detectChanges();
           }
         },
-        onRpcErrorCleared: (subscription) => {
+        onRpcErrorCleared: (_subscription) => {
           if (this.dynamicWidgetComponent) {
             this.dynamicWidgetComponent.rpcErrorText = null;
             this.dynamicWidgetComponent.rpcRejection = null;
-            this.clearMessage();
+            if (this.typeParameters.displayRpcMessageToast) {
+              this.clearMessage();
+            }
             this.detectChanges();
           }
         }
       };
-      this.createSubscription(options).subscribe(
-        (subscription) => {
+      this.createSubscription(options).subscribe({
+        next: (subscription) => {
           this.widgetContext.defaultSubscription = subscription;
-          createSubscriptionSubject.next();
-          createSubscriptionSubject.complete();
+          this.ngZone.run(() => {
+            createSubscriptionSubject.next();
+            createSubscriptionSubject.complete();
+          });
         },
-        (err) => {
-          createSubscriptionSubject.error(err);
+        error: (err) => {
+          this.ngZone.run(() => {
+            createSubscriptionSubject.error(err);
+          });
         }
-      );
+      });
       this.detectChanges();
     } else if (this.widget.type === widgetType.static) {
       this.loadingData = false;
@@ -1010,7 +1124,7 @@ export class WidgetComponent extends PageComponent implements OnInit, AfterViewI
     return result;
   }
 
-  private handleWidgetAction($event: Event, descriptor: WidgetActionDescriptor,
+  private handleWidgetAction($event: Event, descriptor: WidgetAction,
                              entityId?: EntityId, entityName?: string, additionalParams?: any, entityLabel?: string): void {
     const type = descriptor.type;
     const targetEntityParamName = descriptor.stateEntityParamName;
@@ -1021,31 +1135,34 @@ export class WidgetComponent extends PageComponent implements OnInit, AfterViewI
     switch (type) {
       case WidgetActionType.openDashboardState:
       case WidgetActionType.updateDashboardState:
-        let targetDashboardStateId = descriptor.targetDashboardStateId;
         const params = deepClone(this.widgetContext.stateController.getStateParams());
-        this.updateEntityParams(params, targetEntityParamName, targetEntityId, entityName, entityLabel);
+        updateEntityParams(params, targetEntityParamName, targetEntityId, entityName, entityLabel);
         if (type === WidgetActionType.openDashboardState) {
-          if (descriptor.openInSeparateDialog) {
-            this.openDashboardStateInDialog(descriptor, entityId, entityName, additionalParams, entityLabel);
+          if (descriptor.openInPopover) {
+            this.openDashboardStateInPopover($event, descriptor.targetDashboardStateId, params,
+              descriptor.popoverHideDashboardToolbar, descriptor.popoverPreferredPlacement,
+              descriptor.popoverHideOnClickOutside, descriptor.popoverWidth, descriptor.popoverHeight, descriptor.popoverStyle);
+          } else if (descriptor.openInSeparateDialog && !this.mobileService.isMobileApp()) {
+            this.openDashboardStateInSeparateDialog(descriptor.targetDashboardStateId, params, descriptor.dialogTitle,
+              descriptor.dialogHideDashboardToolbar, descriptor.dialogWidth, descriptor.dialogHeight);
           } else {
-            this.widgetContext.stateController.openState(targetDashboardStateId, params, descriptor.openRightLayout);
+            this.widgetContext.stateController.openState(descriptor.targetDashboardStateId, params, descriptor.openRightLayout);
           }
         } else {
-          this.widgetContext.stateController.updateState(targetDashboardStateId, params, descriptor.openRightLayout);
+          this.widgetContext.stateController.updateState(descriptor.targetDashboardStateId, params, descriptor.openRightLayout);
         }
         break;
       case WidgetActionType.openDashboard:
         const targetDashboardId = descriptor.targetDashboardId;
-        targetDashboardStateId = descriptor.targetDashboardStateId;
         const stateObject: StateObject = {};
         stateObject.params = {};
-        this.updateEntityParams(stateObject.params, targetEntityParamName, targetEntityId, entityName, entityLabel);
-        if (targetDashboardStateId) {
-          stateObject.id = targetDashboardStateId;
+        updateEntityParams(stateObject.params, targetEntityParamName, targetEntityId, entityName, entityLabel);
+        if (descriptor.targetDashboardStateId) {
+          stateObject.id = descriptor.targetDashboardStateId;
         }
         const state = objToBase64URI([ stateObject ]);
         const isSinglePage = this.route.snapshot.data.singlePageMode;
-        let url;
+        let url: string;
         if (isSinglePage) {
           url = `/dashboard/${targetDashboardId}?state=${state}`;
         } else {
@@ -1054,53 +1171,44 @@ export class WidgetComponent extends PageComponent implements OnInit, AfterViewI
         if (descriptor.openNewBrowserTab) {
           window.open(url, '_blank');
         } else {
-          this.router.navigateByUrl(url);
+          this.router.navigateByUrl(url).then(() => {});
         }
+        break;
+      case WidgetActionType.openURL:
+        window.open(descriptor.url, descriptor.openNewBrowserTab ? '_blank' : '_self');
         break;
       case WidgetActionType.custom:
         const customFunction = descriptor.customFunction;
-        if (customFunction && customFunction.length > 0) {
-          try {
-            if (!additionalParams) {
-              additionalParams = {};
-            }
-            const customActionFunction = new Function('$event', 'widgetContext', 'entityId',
-              'entityName', 'additionalParams', 'entityLabel', customFunction);
-            customActionFunction($event, this.widgetContext, entityId, entityName, additionalParams, entityLabel);
-          } catch (e) {
-            console.error(e);
-          }
-        }
-        break;
-      case WidgetActionType.customPretty:
-        const customPrettyFunction = descriptor.customFunction;
-        const customHtml = descriptor.customHtml;
-        const customCss = descriptor.customCss;
-        const customResources = descriptor.customResources;
-        const actionNamespace = `custom-action-pretty-${descriptor.name.toLowerCase()}`;
-        let htmlTemplate = '';
-        if (isDefined(customHtml) && customHtml.length > 0) {
-          htmlTemplate = customHtml;
-        }
-        this.loadCustomActionResources(actionNamespace, customCss, customResources).subscribe(
-          () => {
-            if (isDefined(customPrettyFunction) && customPrettyFunction.length > 0) {
-              try {
-                if (!additionalParams) {
-                  additionalParams = {};
+        if (isNotEmptyTbFunction(customFunction)) {
+          compileTbFunction(this.http, customFunction, '$event', 'widgetContext', 'entityId',
+            'entityName', 'additionalParams', 'entityLabel').subscribe(
+            {
+              next: (compiled) => {
+                try {
+                  if (!additionalParams) {
+                    additionalParams = {};
+                  }
+                  compiled.execute($event, this.widgetContext, entityId, entityName, additionalParams, entityLabel);
+                } catch (e) {
+                  console.error(e);
                 }
-                const customActionPrettyFunction = new Function('$event', 'widgetContext', 'entityId',
-                  'entityName', 'htmlTemplate', 'additionalParams', 'entityLabel', customPrettyFunction);
-                customActionPrettyFunction($event, this.widgetContext, entityId, entityName, htmlTemplate, additionalParams, entityLabel);
-              } catch (e) {
-                console.error(e);
+              },
+              error: (err) => {
+                console.error(err);
               }
             }
-          },
-          (errorMessages: string[]) => {
-            this.processResourcesLoadErrors(errorMessages);
-          }
-        );
+          )
+        }
+        break;
+      case WidgetActionType.placeMapItem:
+        this.widgetContext.actionsApi.placeMapItem({
+          action: descriptor,
+          afterPlaceItemCallback: this.executeCustomPrettyAction.bind(this),
+          additionalParams: additionalParams
+        });
+        break;
+      case WidgetActionType.customPretty:
+        this.executeCustomPrettyAction($event, descriptor, entityId, entityName, additionalParams, entityLabel);
         break;
       case WidgetActionType.mobileAction:
         const mobileAction = descriptor.mobileAction;
@@ -1116,183 +1224,326 @@ export class WidgetComponent extends PageComponent implements OnInit, AfterViewI
     switch (type) {
       case WidgetMobileActionType.takePictureFromGallery:
       case WidgetMobileActionType.takePhoto:
+      case WidgetMobileActionType.takeScreenshot:
+        argsObservable = of([mobileAction.saveToGallery]);
+        break;
       case WidgetMobileActionType.scanQrCode:
       case WidgetMobileActionType.getLocation:
-      case WidgetMobileActionType.takeScreenshot:
         argsObservable = of([]);
+        break;
+      case WidgetMobileActionType.deviceProvision:
+        argsObservable = of([mobileAction.provisionType]);
         break;
       case WidgetMobileActionType.mapDirection:
       case WidgetMobileActionType.mapLocation:
-        const getLocationFunctionString = mobileAction.getLocationFunction;
-        const getLocationFunction = new Function('$event', 'widgetContext', 'entityId',
-          'entityName', 'additionalParams', 'entityLabel', getLocationFunctionString);
-        const locationArgs = getLocationFunction($event, this.widgetContext, entityId, entityName, additionalParams, entityLabel);
-        if (locationArgs && locationArgs instanceof Observable) {
-          argsObservable = locationArgs;
-        } else {
-          argsObservable = of(locationArgs);
-        }
-        argsObservable = argsObservable.pipe(map(latLng => {
-          let valid = false;
-          if (Array.isArray(latLng) && latLng.length === 2) {
-            if (typeof latLng[0] === 'number' && typeof latLng[1] === 'number') {
-              valid = true;
+        argsObservable = compileTbFunction(this.http, mobileAction.getLocationFunction, '$event', 'widgetContext', 'entityId',
+          'entityName', 'additionalParams', 'entityLabel').pipe(
+          switchMap(getLocationFunction => {
+            const locationArgs = getLocationFunction.execute($event, this.widgetContext, entityId, entityName, additionalParams, entityLabel);
+            if (locationArgs && locationArgs instanceof Observable) {
+              return locationArgs;
+            } else {
+              return of(locationArgs);
             }
-          }
-          if (valid) {
-            return latLng;
-          } else {
-            throw new Error('Location function did not return valid array of latitude/longitude!');
-          }
-        }));
+          }),
+          map(latLng => {
+            let valid = false;
+            if (Array.isArray(latLng) && latLng.length === 2) {
+              if (typeof latLng[0] === 'number' && typeof latLng[1] === 'number') {
+                valid = true;
+              }
+            }
+            if (valid) {
+              return latLng;
+            } else {
+              throw new Error('Location function did not return valid array of latitude/longitude!');
+            }
+          })
+        );
         break;
       case WidgetMobileActionType.makePhoneCall:
-        const getPhoneNumberFunctionString = mobileAction.getPhoneNumberFunction;
-        const getPhoneNumberFunction = new Function('$event', 'widgetContext', 'entityId',
-          'entityName', 'additionalParams', 'entityLabel', getPhoneNumberFunctionString);
-        const phoneNumberArg = getPhoneNumberFunction($event, this.widgetContext, entityId, entityName, additionalParams, entityLabel);
-        if (phoneNumberArg && phoneNumberArg instanceof Observable) {
-          argsObservable = phoneNumberArg.pipe(map(phoneNumber => [phoneNumber]));
-        } else {
-          argsObservable = of([phoneNumberArg]);
-        }
-        argsObservable = argsObservable.pipe(map(phoneNumberArr => {
-          let valid = false;
-          if (Array.isArray(phoneNumberArr) && phoneNumberArr.length === 1) {
-            if (phoneNumberArr[0] !== null) {
-              valid = true;
+        argsObservable = compileTbFunction(this.http, mobileAction.getPhoneNumberFunction, '$event', 'widgetContext', 'entityId',
+          'entityName', 'additionalParams', 'entityLabel').pipe(
+          switchMap(getPhoneNumberFunction => {
+            const phoneNumberArg = getPhoneNumberFunction.execute($event, this.widgetContext, entityId, entityName, additionalParams, entityLabel);
+            if (phoneNumberArg && phoneNumberArg instanceof Observable) {
+              return phoneNumberArg.pipe(map(phoneNumber => [phoneNumber]));
+            } else {
+              return of([phoneNumberArg]);
             }
-          }
-          if (valid) {
-            return phoneNumberArr;
-          } else {
-            throw new Error('Phone number function did not return valid number!');
-          }
-        }));
+          }),
+          map(phoneNumberArr => {
+            let valid = false;
+            if (Array.isArray(phoneNumberArr) && phoneNumberArr.length === 1) {
+              if (phoneNumberArr[0] !== null) {
+                valid = true;
+              }
+            }
+            if (valid) {
+              return phoneNumberArr;
+            } else {
+              throw new Error('Phone number function did not return valid number!');
+            }
+          })
+        );
         break;
     }
-    argsObservable.subscribe((args) => {
-      this.mobileService.handleWidgetMobileAction(type, ...args).subscribe(
-        (result) => {
-          if (result) {
-            if (result.hasError) {
-              this.handleWidgetMobileActionError(result.error, $event, mobileAction, entityId, entityName, additionalParams, entityLabel);
-            } else if (result.hasResult) {
-              const actionResult = result.result;
-              switch (type) {
-                case WidgetMobileActionType.takePictureFromGallery:
-                case WidgetMobileActionType.takePhoto:
-                case WidgetMobileActionType.takeScreenshot:
-                  const imageUrl = actionResult.imageUrl;
-                  if (mobileAction.processImageFunction && mobileAction.processImageFunction.length) {
-                    try {
-                      const processImageFunction = new Function('imageUrl', '$event', 'widgetContext', 'entityId',
-                        'entityName', 'additionalParams', 'entityLabel', mobileAction.processImageFunction);
-                      processImageFunction(imageUrl, $event, this.widgetContext, entityId, entityName, additionalParams, entityLabel);
-                    } catch (e) {
-                      console.error(e);
-                    }
+    argsObservable.subscribe(
+      {
+        next: (args) => {
+          this.mobileService.handleWidgetMobileAction(type, ...args).subscribe(
+            (result) => {
+              if (result) {
+                if (result.hasError) {
+                  this.handleWidgetMobileActionError(result.error, $event, mobileAction, entityId, entityName, additionalParams, entityLabel);
+                } else if (result.hasResult) {
+                  const actionResult = result.result;
+                  switch (type) {
+                    case WidgetMobileActionType.takePictureFromGallery:
+                    case WidgetMobileActionType.takePhoto:
+                    case WidgetMobileActionType.takeScreenshot:
+                      const imageUrl = actionResult.imageUrl;
+                      if (!additionalParams) {
+                        additionalParams = {};
+                      }
+                      additionalParams.imageInfo = actionResult.imageInfo;
+                      if (isNotEmptyTbFunction(mobileAction.processImageFunction)) {
+                        compileTbFunction(this.http, mobileAction.processImageFunction, 'imageUrl', '$event', 'widgetContext', 'entityId',
+                          'entityName', 'additionalParams', 'entityLabel').subscribe(
+                          {
+                            next: (compiled) => {
+                              try {
+                                compiled.execute(imageUrl, $event, this.widgetContext, entityId, entityName, additionalParams, entityLabel);
+                              } catch (e) {
+                                console.error(e);
+                              }
+                            },
+                            error: (err) => {
+                              console.error(err);
+                            }
+                          }
+                        );
+                      }
+                      break;
+                    case WidgetMobileActionType.deviceProvision:
+                      const deviceName = actionResult.deviceName;
+                      if (isNotEmptyTbFunction(mobileAction.handleProvisionSuccessFunction)) {
+                        compileTbFunction(this.http, mobileAction.handleProvisionSuccessFunction, 'deviceName', '$event', 'widgetContext', 'entityId',
+                          'entityName', 'additionalParams', 'entityLabel').subscribe(
+                          {
+                            next: (compiled) => {
+                              try {
+                                compiled.execute(deviceName, $event, this.widgetContext, entityId, entityName, additionalParams, entityLabel);
+                              } catch (e) {
+                                console.error(e);
+                              }
+                            },
+                            error: (err) => {
+                              console.error(err);
+                            }
+                          }
+                        );
+                      }
+                      break;
+                    case WidgetMobileActionType.scanQrCode:
+                      const code = actionResult.code;
+                      const format = actionResult.format;
+                      if (isNotEmptyTbFunction(mobileAction.processQrCodeFunction)) {
+                        compileTbFunction(this.http, mobileAction.processQrCodeFunction, 'code', 'format', '$event', 'widgetContext', 'entityId',
+                          'entityName', 'additionalParams', 'entityLabel').subscribe(
+                          {
+                            next: (compiled) => {
+                              try {
+                                compiled.execute(code, format, $event, this.widgetContext, entityId, entityName, additionalParams, entityLabel);
+                              } catch (e) {
+                                console.error(e);
+                              }
+                            },
+                            error: (err) => {
+                              console.error(err);
+                            }
+                          }
+                        );
+                      }
+                      break;
+                    case WidgetMobileActionType.getLocation:
+                      const latitude = actionResult.latitude;
+                      const longitude = actionResult.longitude;
+                      if (isNotEmptyTbFunction(mobileAction.processLocationFunction)) {
+                        compileTbFunction(this.http, mobileAction.processLocationFunction, 'latitude', 'longitude', '$event', 'widgetContext', 'entityId',
+                          'entityName', 'additionalParams', 'entityLabel').subscribe(
+                          {
+                            next: (compiled) => {
+                              try {
+                                compiled.execute(latitude, longitude, $event, this.widgetContext,
+                                  entityId, entityName, additionalParams, entityLabel);
+                              } catch (e) {
+                                console.error(e);
+                              }
+                            },
+                            error: (err) => {
+                              console.error(err);
+                            }
+                          }
+                        );
+                      }
+                      break;
+                    case WidgetMobileActionType.mapDirection:
+                    case WidgetMobileActionType.mapLocation:
+                    case WidgetMobileActionType.makePhoneCall:
+                      const launched = actionResult.launched;
+                      if (isNotEmptyTbFunction(mobileAction.processLaunchResultFunction)) {
+                        compileTbFunction(this.http, mobileAction.processLaunchResultFunction, 'launched', '$event', 'widgetContext', 'entityId',
+                          'entityName', 'additionalParams', 'entityLabel').subscribe(
+                          {
+                            next: (compiled) => {
+                              try {
+                                compiled.execute(launched, $event, this.widgetContext,
+                                  entityId, entityName, additionalParams, entityLabel);
+                              } catch (e) {
+                                console.error(e);
+                              }
+                            },
+                            error: (err) => {
+                              console.error(err);
+                            }
+                          }
+                        );
+                      }
+                      break;
                   }
-                  break;
-                case WidgetMobileActionType.scanQrCode:
-                  const code = actionResult.code;
-                  const format = actionResult.format;
-                  if (mobileAction.processQrCodeFunction && mobileAction.processQrCodeFunction.length) {
-                    try {
-                      const processQrCodeFunction = new Function('code', 'format', '$event', 'widgetContext', 'entityId',
-                        'entityName', 'additionalParams', 'entityLabel', mobileAction.processQrCodeFunction);
-                      processQrCodeFunction(code, format, $event, this.widgetContext, entityId, entityName, additionalParams, entityLabel);
-                    } catch (e) {
-                      console.error(e);
-                    }
+                } else {
+                  if (isNotEmptyTbFunction(mobileAction.handleEmptyResultFunction)) {
+                    compileTbFunction(this.http, mobileAction.handleEmptyResultFunction, '$event', 'widgetContext', 'entityId',
+                      'entityName', 'additionalParams', 'entityLabel').subscribe(
+                      {
+                        next: (compiled) => {
+                          try {
+                            compiled.execute($event, this.widgetContext, entityId, entityName, additionalParams, entityLabel);
+                          } catch (e) {
+                            console.error(e);
+                          }
+                        },
+                        error: (err) => {
+                          console.error(err);
+                        }
+                      }
+                    );
                   }
-                  break;
-                case WidgetMobileActionType.getLocation:
-                  const latitude = actionResult.latitude;
-                  const longitude = actionResult.longitude;
-                  if (mobileAction.processLocationFunction && mobileAction.processLocationFunction.length) {
-                    try {
-                      const processLocationFunction = new Function('latitude', 'longitude', '$event', 'widgetContext', 'entityId',
-                        'entityName', 'additionalParams', 'entityLabel', mobileAction.processLocationFunction);
-                      processLocationFunction(latitude, longitude, $event, this.widgetContext,
-                        entityId, entityName, additionalParams, entityLabel);
-                    } catch (e) {
-                      console.error(e);
+                }
+              } else if (!this.mobileService.isMobileApp()) {
+                if (isNotEmptyTbFunction(mobileAction.handleNonMobileFallbackFunction)) {
+                  compileTbFunction(this.http, mobileAction.handleNonMobileFallbackFunction, '$event', 'widgetContext',).subscribe(
+                    {
+                      next: (compiled) => {
+                        try {
+                          compiled.execute($event, this.widgetContext);
+                        } catch (e) {
+                          console.error(e);
+                        }
+                      },
+                      error: (err) => {
+                        console.error(err);
+                      }
                     }
-                  }
-                  break;
-                case WidgetMobileActionType.mapDirection:
-                case WidgetMobileActionType.mapLocation:
-                case WidgetMobileActionType.makePhoneCall:
-                  const launched = actionResult.launched;
-                  if (mobileAction.processLaunchResultFunction && mobileAction.processLaunchResultFunction.length) {
-                    try {
-                      const processLaunchResultFunction = new Function('launched', '$event', 'widgetContext', 'entityId',
-                        'entityName', 'additionalParams', 'entityLabel', mobileAction.processLaunchResultFunction);
-                      processLaunchResultFunction(launched, $event, this.widgetContext,
-                        entityId, entityName, additionalParams, entityLabel);
-                    } catch (e) {
-                      console.error(e);
-                    }
-                  }
-                  break;
-              }
-            } else {
-              if (mobileAction.handleEmptyResultFunction && mobileAction.handleEmptyResultFunction.length) {
-                try {
-                  const handleEmptyResultFunction = new Function('$event', 'widgetContext', 'entityId',
-                    'entityName', 'additionalParams', 'entityLabel', mobileAction.handleEmptyResultFunction);
-                  handleEmptyResultFunction($event, this.widgetContext, entityId, entityName, additionalParams, entityLabel);
-                } catch (e) {
-                  console.error(e);
+                  );
                 }
               }
             }
+          );
+        },
+        error: err => {
+          let errorMessage: string;
+          if (err && typeof err === 'string') {
+            errorMessage = err;
+          } else if (err && err.message) {
+            errorMessage = err.message;
           }
+          errorMessage = `Failed to get mobile action arguments${errorMessage ? `: ${errorMessage}` : '!'}`;
+          this.handleWidgetMobileActionError(errorMessage, $event, mobileAction, entityId, entityName, additionalParams, entityLabel);
         }
-      );
-    },
-    (err) => {
-      let errorMessage;
-      if (err && typeof err === 'string') {
-        errorMessage = err;
-      } else if (err && err.message) {
-        errorMessage = err.message;
-      }
-      errorMessage = `Failed to get mobile action arguments${errorMessage ? `: ${errorMessage}` : '!'}`;
-      this.handleWidgetMobileActionError(errorMessage, $event, mobileAction, entityId, entityName, additionalParams, entityLabel);
-    });
+      });
   }
 
   private handleWidgetMobileActionError(error: string, $event: Event, mobileAction: WidgetMobileActionDescriptor,
                                         entityId?: EntityId, entityName?: string, additionalParams?: any, entityLabel?: string) {
-    if (mobileAction.handleErrorFunction && mobileAction.handleErrorFunction.length) {
-      try {
-        const handleErrorFunction = new Function('error', '$event', 'widgetContext', 'entityId',
-          'entityName', 'additionalParams', 'entityLabel', mobileAction.handleErrorFunction);
-        handleErrorFunction(error, $event, this.widgetContext, entityId, entityName, additionalParams, entityLabel);
-      } catch (e) {
-        console.error(e);
-      }
+    if (isNotEmptyTbFunction(mobileAction.handleErrorFunction)) {
+      compileTbFunction(this.http, mobileAction.handleErrorFunction, 'error', '$event', 'widgetContext', 'entityId',
+        'entityName', 'additionalParams', 'entityLabel').subscribe(
+        {
+          next: (compiled) => {
+            try {
+              compiled.execute(error, $event, this.widgetContext, entityId, entityName, additionalParams, entityLabel);
+            } catch (e) {
+              console.error(e);
+            }
+          },
+          error: (err) => {
+            console.error(err);
+          }
+        }
+      );
     }
   }
 
-  private openDashboardStateInDialog(descriptor: WidgetActionDescriptor,
-                                     entityId?: EntityId, entityName?: string, additionalParams?: any, entityLabel?: string) {
+  private openDashboardStateInPopover($event: Event,
+                                      targetDashboardStateId: string,
+                                      params?: StateParams,
+                                      hideDashboardToolbar = true,
+                                      preferredPlacement: PopoverPlacement = 'top',
+                                      hideOnClickOutside = true,
+                                      popoverWidth = '25vw',
+                                      popoverHeight = '25vh',
+                                      popoverStyle: { [klass: string]: any } = {}) {
+    const trigger = ($event.target || $event.currentTarget) as Element;
+    if (this.popoverService.hasPopover(trigger)) {
+      this.popoverService.hidePopover(trigger);
+    } else {
+      const dashboard = deepClone(this.widgetContext.stateController.dashboardCtrl.dashboardCtx.getDashboard());
+      const stateObject: StateObject = {};
+      stateObject.params = params;
+      if (targetDashboardStateId) {
+        stateObject.id = targetDashboardStateId;
+      }
+      const injector = Injector.create({
+        parent: this.widgetContentContainer.injector, providers: [
+          {
+            provide: 'embeddedValue',
+            useValue: true
+          }
+        ]
+      });
+      const componentRef = this.popoverService.createPopoverRef(this.widgetContentContainer);
+      const component = this.popoverService.displayPopoverWithComponentRef(componentRef, trigger, this.renderer,
+        this.dashboardPageComponent, preferredPlacement, hideOnClickOutside,
+        injector,
+        {
+          embedded: true,
+          syncStateWithQueryParam: false,
+          hideToolbar: hideDashboardToolbar,
+          currentState: objToBase64([stateObject]),
+          dashboard,
+          parentDashboard: this.widgetContext.parentDashboard ?
+            this.widgetContext.parentDashboard : this.widgetContext.dashboard,
+          popoverComponent: componentRef.instance
+        },
+        {width: popoverWidth || '25vw', height: popoverHeight || '25vh'},
+        popoverStyle,
+        {}
+      );
+      this.widgetContext.registerPopoverComponent(component);
+    }
+  }
+
+  private openDashboardStateInSeparateDialog(targetDashboardStateId: string, params?: StateParams, dialogTitle?: string,
+                                             hideDashboardToolbar = true, dialogWidth?: number, dialogHeight?: number): MatDialogRef<any> {
     const dashboard = deepClone(this.widgetContext.stateController.dashboardCtrl.dashboardCtx.getDashboard());
     const stateObject: StateObject = {};
-    stateObject.params = {};
-    const targetEntityParamName = descriptor.stateEntityParamName;
-    const targetDashboardStateId = descriptor.targetDashboardStateId;
-    let targetEntityId: EntityId;
-    if (descriptor.setEntityId) {
-      targetEntityId = entityId;
-    }
-    this.updateEntityParams(stateObject.params, targetEntityParamName, targetEntityId, entityName, entityLabel);
+    stateObject.params = params;
     if (targetDashboardStateId) {
       stateObject.id = targetDashboardStateId;
     }
-    let title = descriptor.dialogTitle;
+    let title = dialogTitle;
     if (!title) {
       if (targetDashboardStateId && dashboard.configuration.states) {
         const dashboardState = dashboard.configuration.states[targetDashboardStateId];
@@ -1305,7 +1556,6 @@ export class WidgetComponent extends PageComponent implements OnInit, AfterViewI
       title = dashboard.title;
     }
     title = this.utils.customTranslation(title, title);
-    const params = stateObject.params;
     const paramsEntityName = params && params.entityName ? params.entityName : '';
     const paramsEntityLabel = params && params.entityLabel ? params.entityLabel : '';
     title = insertVariable(title, 'entityName', paramsEntityName);
@@ -1318,90 +1568,163 @@ export class WidgetComponent extends PageComponent implements OnInit, AfterViewI
         title = insertVariable(title, prop + ':entityLabel', params[prop].entityLabel);
       }
     }
-    this.dialog.open(this.embedDashboardDialogComponent, {
+    dashboard.dialogRef = this.dialog.open(this.embedDashboardDialogComponent, {
       disableClose: true,
       panelClass: ['tb-dialog', 'tb-fullscreen-dialog'],
+      viewContainerRef: this.widgetContentContainer,
       data: {
         dashboard,
         state: objToBase64([ stateObject ]),
         title,
-        hideToolbar: descriptor.dialogHideDashboardToolbar,
-        width: descriptor.dialogWidth,
-        height: descriptor.dialogHeight
+        hideToolbar: hideDashboardToolbar,
+        width: dialogWidth,
+        height: dialogHeight,
+        parentDashboard: this.widgetContext.parentDashboard ?
+          this.widgetContext.parentDashboard : this.widgetContext.dashboard
+      }
+    });
+    this.cd.markForCheck();
+    return dashboard.dialogRef;
+  }
+
+  private elementClick($event: Event) {
+    const elementClicked = ($event.target) as Element;
+    const descriptors = this.getActionDescriptors('elementClick');
+    if (descriptors.length) {
+      const idsList = descriptors.map(descriptor => `#${descriptor.name}`).join(',');
+      const targetElement = $(elementClicked).closest(idsList, this.widgetContext.$container[0]);
+      if (targetElement.length && targetElement[0].id) {
+        const descriptor = descriptors.find(descriptorInfo => descriptorInfo.name === targetElement[0].id);
+        this.onWidgetAction($event, descriptor);
+      }
+    }
+  }
+
+  private cardClick($event: Event) {
+    this.onClick($event, 'cardClick');
+  }
+
+  private click($event: Event) {
+    this.onClick($event, 'click');
+  }
+
+  private onClick($event: Event, sourceId: string) {
+    const descriptors = this.getActionDescriptors(sourceId);
+    if (descriptors.length) {
+      this.onWidgetAction($event, descriptors[0]);
+    }
+  }
+
+  private onWidgetAction($event: Event, action: WidgetAction) {
+    if ($event) {
+      $event.stopPropagation();
+    }
+    const entityInfo = this.getActiveEntityInfo();
+    const entityId = entityInfo ? entityInfo.entityId : null;
+    const entityName = entityInfo ? entityInfo.entityName : null;
+    const entityLabel = entityInfo && entityInfo.entityLabel ? entityInfo.entityLabel : null;
+    this.handleWidgetAction($event, action, entityId, entityName, null, entityLabel);
+  }
+
+  private executeCustomPrettyAction($event: Event, descriptor: WidgetAction, entityId?: EntityId,
+                                    entityName?: string, additionalParams?: any, entityLabel?: string) {
+    const customPrettyFunction = descriptor.customFunction;
+    const customHtml = descriptor.customHtml;
+    const customCss = descriptor.customCss;
+    const customResources = descriptor.customResources;
+    const actionNamespace = `custom-action-pretty-${guid()}`;
+    let htmlTemplate = '';
+    if (isDefined(customHtml) && customHtml.length > 0) {
+      htmlTemplate = customHtml;
+    }
+    this.loadCustomActionResources(actionNamespace, customCss, customResources, descriptor).subscribe({
+      next: () => {
+        if (isNotEmptyTbFunction(customPrettyFunction)) {
+          compileTbFunction(this.http, customPrettyFunction, '$event', 'widgetContext', 'entityId',
+            'entityName', 'htmlTemplate', 'additionalParams', 'entityLabel').subscribe({
+            next: (compiled) => {
+              try {
+                if (!additionalParams) {
+                  additionalParams = {};
+                }
+                this.widgetContext.customDialog.setAdditionalImports(descriptor.customImports);
+                compiled.execute($event, this.widgetContext, entityId, entityName, htmlTemplate, additionalParams, entityLabel);
+              } catch (e) {
+                console.error(e);
+              }
+            },
+            error: (err) => {
+              console.error(err);
+            }
+          });
+        }
+      },
+      error: (errorMessages: string[]) => {
+        this.processResourcesLoadErrors(errorMessages);
       }
     });
   }
 
-  private elementClick($event: Event) {
-    const e = ($event.target || $event.srcElement) as Element;
-    if (e.id) {
-      const descriptors = this.getActionDescriptors('elementClick');
-      if (descriptors.length) {
-        descriptors.forEach((descriptor) => {
-          if (descriptor.name === e.id) {
-            $event.stopPropagation();
-            const entityInfo = this.getActiveEntityInfo();
-            const entityId = entityInfo ? entityInfo.entityId : null;
-            const entityName = entityInfo ? entityInfo.entityName : null;
-            const entityLabel = entityInfo && entityInfo.entityLabel ? entityInfo.entityLabel : null;
-            this.handleWidgetAction($event, descriptor, entityId, entityName, null, entityLabel);
-          }
-        });
-      }
-    }
-  }
+  private loadCustomActionResources(actionNamespace: string, customCss: string, customResources: Array<WidgetResource>,
+                                    actionDescriptor: WidgetAction): Observable<any> {
+    const resourceTasks: Observable<string>[] = [];
+    const modulesTasks: Observable<ModulesWithComponents | string>[] = [];
 
-  private updateEntityParams(params: StateParams, targetEntityParamName?: string, targetEntityId?: EntityId,
-                             entityName?: string, entityLabel?: string) {
-    if (targetEntityId) {
-      let targetEntityParams: StateParams;
-      if (targetEntityParamName && targetEntityParamName.length) {
-        targetEntityParams = params[targetEntityParamName];
-        if (!targetEntityParams) {
-          targetEntityParams = {};
-          params[targetEntityParamName] = targetEntityParams;
-          params.targetEntityParamName = targetEntityParamName;
-        }
-      } else {
-        targetEntityParams = params;
-      }
-      targetEntityParams.entityId = targetEntityId;
-      if (entityName) {
-        targetEntityParams.entityName = entityName;
-      }
-      if (entityLabel) {
-        targetEntityParams.entityLabel = entityLabel;
-      }
-    }
-  }
-
-  private loadCustomActionResources(actionNamespace: string, customCss: string, customResources: Array<WidgetResource>): Observable<any> {
     if (isDefined(customCss) && customCss.length > 0) {
       this.cssParser.cssPreviewNamespace = actionNamespace;
       this.cssParser.createStyleElement(actionNamespace, customCss, 'nonamespace');
     }
-    const resourceTasks: Observable<string>[] = [];
+
     if (isDefined(customResources) && customResources.length > 0) {
-      customResources.forEach((resource) => {
-        resourceTasks.push(
-          this.resources.loadResource(resource.url).pipe(
-            catchError(e => of(`Failed to load custom action resource: '${resource.url}'`))
-          )
-        );
+      customResources.forEach(resource => {
+        if (resource.isModule) {
+          modulesTasks.push(
+            this.resources.loadModulesWithComponents(resource.url, this.modulesMap).pipe(
+              catchError((e: Error) => of(e?.message ? e.message : `Failed to load custom action resource module: '${resource.url}'`))
+            )
+          );
+        } else {
+          resourceTasks.push(
+            this.resources.loadResource(resource.url).pipe(
+              catchError(() => of(`Failed to load custom action resource: '${resource.url}'`))
+            )
+          );
+        }
       });
+
+      if (modulesTasks.length) {
+        const importsObservable: Observable<string | Type<any>[]> = forkJoin(modulesTasks).pipe(
+          map(res => {
+            const msg = res.find(r => typeof r === 'string');
+            if (msg) {
+              return msg as string;
+            } else {
+              const modulesWithComponents = flatModulesWithComponents(res as ModulesWithComponents[]);
+              return modulesWithComponentsToTypes(modulesWithComponents);
+            }
+          })
+        );
+
+        resourceTasks.push(importsObservable.pipe(
+          map((resolvedImports) => {
+            if (typeof resolvedImports === 'string') {
+              return resolvedImports;
+            } else {
+              actionDescriptor.customImports = resolvedImports;
+              return null;
+            }
+          })));
+      }
+
       return forkJoin(resourceTasks).pipe(
         switchMap(msgs => {
-            let errors: string[];
-            if (msgs && msgs.length) {
-              errors = msgs.filter(msg => msg && msg.length > 0);
-            }
-            if (errors && errors.length) {
-              return throwError(errors);
-            } else {
-              return of(null);
-            }
-          }
-      ));
+          const errors = msgs.filter(msg => msg && msg.length > 0);
+          if (errors.length > 0) {
+            return throwError(() => errors);
+          } else {
+            return of(null);
+          }}
+        ));
     } else {
       return of(null);
     }

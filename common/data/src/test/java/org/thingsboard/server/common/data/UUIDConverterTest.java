@@ -1,5 +1,5 @@
 /**
- * Copyright © 2016-2021 The Thingsboard Authors
+ * Copyright © 2016-2025 The Thingsboard Authors
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -16,28 +16,25 @@
 package org.thingsboard.server.common.data;
 
 import com.datastax.oss.driver.api.core.uuid.Uuids;
-import org.junit.Assert;
-import org.junit.Test;
-import org.junit.runner.RunWith;
-import org.mockito.junit.MockitoJUnitRunner;
+import org.junit.jupiter.api.Assertions;
+import org.junit.jupiter.api.Test;
+import org.junit.jupiter.api.extension.ExtendWith;
+import org.mockito.junit.jupiter.MockitoExtension;
 
-import java.util.ArrayList;
-import java.util.Arrays;
 import java.util.Random;
 import java.util.UUID;
-import java.util.stream.Collectors;
 
 /**
  * Created by ashvayka on 14.07.17.
  */
-@RunWith(MockitoJUnitRunner.class)
+@ExtendWith(MockitoExtension .class)
 public class UUIDConverterTest {
 
     @Test
     public void basicUuidToStringTest() {
         UUID original = UUID.fromString("58e0a7d7-eebc-11d8-9669-0800200c9a66");
         String result = UUIDConverter.fromTimeUUID(original);
-        Assert.assertEquals("1d8eebc58e0a7d796690800200c9a66", result);
+        Assertions.assertEquals("1d8eebc58e0a7d796690800200c9a66", result);
     }
 
 
@@ -49,18 +46,20 @@ public class UUIDConverterTest {
     @Test
     public void basicUuidConversion() {
         UUID original = UUID.fromString("3dd11790-abf2-11ea-b151-83a091b9d4cc");
-        Assert.assertEquals(Uuids.unixTimestamp(original), 1591886749577L);
+        Assertions.assertEquals(Uuids.unixTimestamp(original), 1591886749577L);
     }
 
     @Test
     public void basicStringToUUIDTest() {
         UUID result = UUIDConverter.fromString("1d8eebc58e0a7d796690800200c9a66");
-        Assert.assertEquals(UUID.fromString("58e0a7d7-eebc-11d8-9669-0800200c9a66"), result);
+        Assertions.assertEquals(UUID.fromString("58e0a7d7-eebc-11d8-9669-0800200c9a66"), result);
     }
 
-    @Test(expected = IllegalArgumentException.class)
+    @Test
     public void nonV1UuidToStringTest() {
-        UUIDConverter.fromTimeUUID(UUID.fromString("58e0a7d7-eebc-01d8-9669-0800200c9a66"));
+        Assertions.assertThrows(IllegalArgumentException.class, () -> {
+            UUIDConverter.fromTimeUUID(UUID.fromString("58e0a7d7-eebc-01d8-9669-0800200c9a66"));
+        });
     }
 
     @Test
@@ -83,7 +82,7 @@ public class UUIDConverterTest {
                 System.out.println("Before: " + before + " | " + beforeStr);
                 System.out.println("After: " + after + " | " + afterStr);
             }
-            Assert.assertTrue(afterStr.compareTo(beforeStr) >= 0);
+            Assertions.assertTrue(afterStr.compareTo(beforeStr) >= 0);
         }
     }
 

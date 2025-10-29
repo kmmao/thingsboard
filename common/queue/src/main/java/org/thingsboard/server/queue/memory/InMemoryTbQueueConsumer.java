@@ -1,5 +1,5 @@
 /**
- * Copyright © 2016-2021 The Thingsboard Authors
+ * Copyright © 2016-2025 The Thingsboard Authors
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -27,12 +27,13 @@ import java.util.stream.Collectors;
 
 @Slf4j
 public class InMemoryTbQueueConsumer<T extends TbQueueMsg> implements TbQueueConsumer<T> {
-    private final InMemoryStorage storage = InMemoryStorage.getInstance();
+    private final InMemoryStorage storage;
     private volatile Set<TopicPartitionInfo> partitions;
     private volatile boolean stopped;
     private volatile boolean subscribed;
 
-    public InMemoryTbQueueConsumer(String topic) {
+    public InMemoryTbQueueConsumer(InMemoryStorage storage, String topic) {
+        this.storage = storage;
         this.topic = topic;
         stopped = false;
     }
@@ -57,8 +58,14 @@ public class InMemoryTbQueueConsumer<T extends TbQueueMsg> implements TbQueueCon
     }
 
     @Override
+    public void stop() {
+        stopped = true;
+    }
+
+    @Override
     public void unsubscribe() {
         stopped = true;
+        subscribed = false;
     }
 
     @Override
@@ -96,4 +103,15 @@ public class InMemoryTbQueueConsumer<T extends TbQueueMsg> implements TbQueueCon
     @Override
     public void commit() {
     }
+
+    @Override
+    public boolean isStopped() {
+        return stopped;
+    }
+
+    @Override
+    public List<String> getFullTopicNames() {
+        return partitions.stream().map(TopicPartitionInfo::getFullTopicName).collect(Collectors.toList());
+    }
+
 }

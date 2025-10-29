@@ -1,5 +1,5 @@
 ///
-/// Copyright © 2016-2021 The Thingsboard Authors
+/// Copyright © 2016-2025 The Thingsboard Authors
 ///
 /// Licensed under the Apache License, Version 2.0 (the "License");
 /// you may not use this file except in compliance with the License.
@@ -17,8 +17,10 @@
 import { CustomerId } from '@shared/models/id/customer-id';
 import { ContactBased } from '@shared/models/contact-based.model';
 import { TenantId } from './id/tenant-id';
+import { ExportableEntity } from '@shared/models/base-data';
+import { HasTenantId, HasVersion } from '@shared/models/entity.models';
 
-export interface Customer extends ContactBased<CustomerId> {
+export interface Customer extends ContactBased<CustomerId>, HasTenantId, HasVersion, ExportableEntity<CustomerId> {
   tenantId: TenantId;
   title: string;
   additionalInfo?: any;

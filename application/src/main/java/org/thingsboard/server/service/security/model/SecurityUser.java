@@ -1,5 +1,5 @@
 /**
- * Copyright © 2016-2021 The Thingsboard Authors
+ * Copyright © 2016-2025 The Thingsboard Authors
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -15,12 +15,15 @@
  */
 package org.thingsboard.server.service.security.model;
 
+import lombok.Getter;
+import lombok.Setter;
 import org.springframework.security.core.GrantedAuthority;
 import org.springframework.security.core.authority.SimpleGrantedAuthority;
 import org.thingsboard.server.common.data.User;
 import org.thingsboard.server.common.data.id.UserId;
 
 import java.util.Collection;
+import java.util.UUID;
 import java.util.stream.Collectors;
 import java.util.stream.Stream;
 
@@ -29,8 +32,12 @@ public class SecurityUser extends User {
     private static final long serialVersionUID = -797397440703066079L;
 
     private Collection<GrantedAuthority> authorities;
+    @Getter @Setter
     private boolean enabled;
+    @Getter @Setter
     private UserPrincipal userPrincipal;
+    @Getter @Setter
+    private String sessionId = UUID.randomUUID().toString();
 
     public SecurityUser() {
         super();
@@ -53,22 +60,6 @@ public class SecurityUser extends User {
                     .collect(Collectors.toList());
         }
         return authorities;
-    }
-
-    public boolean isEnabled() {
-        return enabled;
-    }
-
-    public UserPrincipal getUserPrincipal() {
-        return userPrincipal;
-    }
-
-    public void setEnabled(boolean enabled) {
-        this.enabled = enabled;
-    }
-
-    public void setUserPrincipal(UserPrincipal userPrincipal) {
-        this.userPrincipal = userPrincipal;
     }
 
 }

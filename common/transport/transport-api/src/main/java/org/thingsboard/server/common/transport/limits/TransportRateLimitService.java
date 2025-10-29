@@ -1,5 +1,5 @@
 /**
- * Copyright © 2016-2021 The Thingsboard Authors
+ * Copyright © 2016-2025 The Thingsboard Authors
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -18,11 +18,14 @@ package org.thingsboard.server.common.transport.limits;
 import org.thingsboard.server.common.data.EntityType;
 import org.thingsboard.server.common.data.id.DeviceId;
 import org.thingsboard.server.common.data.id.TenantId;
+import org.thingsboard.server.common.data.util.TbPair;
 import org.thingsboard.server.common.transport.profile.TenantProfileUpdateResult;
+
+import java.net.InetSocketAddress;
 
 public interface TransportRateLimitService {
 
-    EntityType checkLimits(TenantId tenantId, DeviceId deviceId, int dataPoints);
+    TbPair<EntityType, Boolean> checkLimits(TenantId tenantId, DeviceId gatewayId, DeviceId deviceId, int dataPoints, boolean isGateway);
 
     void update(TenantProfileUpdateResult update);
 
@@ -33,4 +36,13 @@ public interface TransportRateLimitService {
     void remove(DeviceId deviceId);
 
     void update(TenantId tenantId, boolean transportEnabled);
+
+    boolean checkAddress(InetSocketAddress address);
+
+    void onAuthSuccess(InetSocketAddress address);
+
+    void onAuthFailure(InetSocketAddress address);
+
+    void invalidateRateLimitsIpTable(long sessionInactivityTimeout);
+
 }
